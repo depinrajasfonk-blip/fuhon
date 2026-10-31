@@ -63,14 +63,12 @@ HTTab:CreateButton({
 })
 
 -- 5. Tab Tools / Dex Explorer (Menggunakan loader alternatif)
-local ToolsTab = Window:CreateTab("Tools", 4483362458)
-ToolsTab:CreateSection("Explorer & Spy")
-ToolsTab:CreateButton({
+local ToolsTab:CreateButton({
    Name = "Buka Dark Dex (Explorer)",
    Callback = function()
       local success, err = pcall(function()
-         -- Link loader alternatif untuk Dark Dex
-         loadstring(game:HttpGet("https://raw.githubusercontent.com/cryppsec/DarkDex/main/DarkDex.lua"))()
+         -- Menggunakan tautan alternatif Dark Dex yang aktif
+         loadstring(game:HttpGet("https://raw.githubusercontent.com/Babyhamsta/RBLX_Scripts/main/Universal/DarkDex_V3.lua"))()
       end)
       
       if success then
