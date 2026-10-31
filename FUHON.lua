@@ -3,6 +3,8 @@ warn("[HUB] mulai")
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local RS = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
 local WR = RS:WaitForChild("WorldRemotes", 10)
 local SetTile = WR and WR:WaitForChild("SetTile", 10)
 
@@ -19,15 +21,38 @@ local C = {
    Grow = 75,                -- waktu tumbuh 70 dtk + jeda aman
    Seed = 4587,              -- ID seed sugarcane
    PlantAt = nil, On = false,
+   Move = false, PosA = nil, PosB = nil, MoveWait = 0.12, -- gerak otomatis
 }
 local Spy = {On = false, Logs = {}}
 local IGNORE = {ByteNetUnreliable = true, SaveInventory = true}
 
 -- ====== FUNGSI ======
+local function getHRP()
+   local ch = LP.Character
+   return ch and ch:FindFirstChild("HumanoidRootPart")
+end
+
+-- pindah ke posisi di antara PosA (tile X1) dan PosB (tile X2)
+local function moveTo(x)
+   if not (C.Move and C.PosA and C.PosB) then return end
+   local hrp = getHRP()
+   if not hrp then return end
+   local a = (C.X2 == C.X1) and 0 or (x - C.X1) / (C.X2 - C.X1)
+   hrp.CFrame = C.PosA:Lerp(C.PosB, a)
+   task.wait(C.MoveWait)
+end
+
 local function harvestRow()
+   local hrp = getHRP()
+   local home = hrp and hrp.CFrame
    for x = math.min(C.X1, C.X2), math.max(C.X1, C.X2) do
+      moveTo(x)
       SetTile:FireServer("fg", x, C.Y, 0)
       task.wait(C.Delay)
+   end
+   if C.Move and home then
+      local h = getHRP()
+      if h then h.CFrame = home end
    end
 end
 
@@ -85,6 +110,27 @@ HT:CreateInput({Name = "ID seed", PlaceholderText = "4587", RemoveTextAfterFocus
    Callback = function(t) C.Seed = tonumber(t) or C.Seed end})
 HT:CreateSlider({Name = "Delay antar tile (detik)", Range = {0.1, 1}, Increment = 0.05,
    CurrentValue = 0.15, Flag = "HD", Callback = function(v) C.Delay = v end})
+
+HT:CreateSection("Gerak Otomatis")
+HT:CreateParagraph({Title = "Kalibrasi", Content = "Berdiri di tempat kamu biasa punch tile X mulai, tekan Simpan A. Pindah ke tempat punch tile X akhir, tekan Simpan B."})
+HT:CreateButton({Name = "Simpan posisi A (tile X mulai)", Callback = function()
+   local h = getHRP()
+   if h then C.PosA = h.CFrame notify("Posisi A", "Tersimpan") end
+end})
+HT:CreateButton({Name = "Simpan posisi B (tile X akhir)", Callback = function()
+   local h = getHRP()
+   if h then C.PosB = h.CFrame notify("Posisi B", "Tersimpan") end
+end})
+HT:CreateButton({Name = "Tes pindah ke A", Callback = function()
+   local h = getHRP()
+   if h and C.PosA then h.CFrame = C.PosA end
+end})
+HT:CreateButton({Name = "Tes pindah ke B", Callback = function()
+   local h = getHRP()
+   if h and C.PosB then h.CFrame = C.PosB end
+end})
+HT:CreateToggle({Name = "Gerak otomatis saat harvest", CurrentValue = false, Flag = "AutoMove",
+   Callback = function(v) C.Move = v end})
 
 HT:CreateSection("Kontrol")
 local Status = HT:CreateParagraph({Title = "Status", Content = "Menunggu plant manual..."})
