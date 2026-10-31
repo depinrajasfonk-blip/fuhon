@@ -62,8 +62,10 @@ HTTab:CreateButton({
    end,
 })
 
--- 5. Tab Tools / Dex Explorer (Menggunakan loader alternatif)
-local ToolsTab:CreateButton({
+-- 5. Tab Tools / Dex Explorer
+local ToolsTab = Window:CreateTab("Tools", 4483362458)
+ToolsTab:CreateSection("Eksplorasi Game")
+ToolsTab:CreateButton({
    Name = "Buka Dark Dex (Explorer)",
    Callback = function()
       local success, err = pcall(function()
