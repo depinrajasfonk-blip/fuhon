@@ -69,9 +69,8 @@ ToolsTab:CreateSection("Explorer & Spy")
 ToolsTab:CreateButton({
    Name = "Buka Dark Dex (Explorer)",
    Callback = function()
-      -- Perintah loadstring untuk memuat Dark Dex
       local success, err = pcall(function()
-         loadstring(game:HttpGet("https://raw.githubusercontent.com/igneous-master/luau/main/dark-dex.lua"))()
+         loadstring(game:HttpGet("https://gist.githubusercontent.com/Dementiaenjoyer/d141e988b40aa9b7eb146bc51a7e4b52/raw/darkdex.lua"))()
       end)
       
       if success then
@@ -84,7 +83,7 @@ ToolsTab:CreateButton({
       else
          Rayfield:Notify({
             Title = "Gagal",
-            Content = "Gagal memuat Dark Dex.",
+            Content = "Gagal memuat Dark Dex. Cek koneksi.",
             Duration = 3,
             Image = 4483362458,
          })
