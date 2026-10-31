@@ -32,7 +32,6 @@ PNBTab:CreateToggle({
          print("Auto PNB diaktifkan!")
          task.spawn(function()
             while autoPNBActive do
-               -- Masukkan logika PNB game Anda di sini
                print("Melakukan Place & Break...")
                task.wait(0.2) 
             end
@@ -63,14 +62,15 @@ HTTab:CreateButton({
    end,
 })
 
--- 5. Tab Tools / Dex Explorer
+-- 5. Tab Tools / Dex Explorer (Menggunakan loader alternatif)
 local ToolsTab = Window:CreateTab("Tools", 4483362458)
 ToolsTab:CreateSection("Explorer & Spy")
 ToolsTab:CreateButton({
    Name = "Buka Dark Dex (Explorer)",
    Callback = function()
       local success, err = pcall(function()
-         loadstring(game:HttpGet("https://gist.githubusercontent.com/Dementiaenjoyer/d141e988b40aa9b7eb146bc51a7e4b52/raw/darkdex.lua"))()
+         -- Link loader alternatif untuk Dark Dex
+         loadstring(game:HttpGet("https://raw.githubusercontent.com/cryppsec/DarkDex/main/DarkDex.lua"))()
       end)
       
       if success then
@@ -81,9 +81,10 @@ ToolsTab:CreateButton({
             Image = 4483362458,
          })
       else
+         warn("Gagal memuat Dex:", err)
          Rayfield:Notify({
             Title = "Gagal",
-            Content = "Gagal memuat Dark Dex. Cek koneksi.",
+            Content = "Gagal memuat Dark Dex. Cek console.",
             Duration = 3,
             Image = 4483362458,
          })
