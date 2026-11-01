@@ -1,4 +1,3 @@
-local RS = game:GetService("RunService")
 local RSvc = game:GetService("ReplicatedStorage")
 local Unr = RSvc:FindFirstChild("ByteNetUnreliable")
 
@@ -6,7 +5,7 @@ local Unr = RSvc:FindFirstChild("ByteNetUnreliable")
 local phys = nil
 local old
 pcall(function()
-   old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+   old = hookmetamethod(game,"__namecall",newcclosure(function(self,...)
       if self==Unr and getnamecallmethod()=="FireServer" and not phys and not checkcaller() then
          for level=1,10 do
             local ok,fn=pcall(debug.getinfo,level,"f")
@@ -29,7 +28,7 @@ pcall(function()
    end))
 end)
 
--- gerak sebentar untuk trigger
+-- Trigger hook
 local gui=game:GetService("Players").LocalPlayer.PlayerGui
 local MG=gui:FindFirstChild("MobileGui")
 local R=MG and MG:FindFirstChild("Right")
@@ -42,40 +41,38 @@ if R then
    VIM:SendMouseButtonEvent(x,y,0,false,game,0)
 end
 task.wait(1)
-
 if not phys then warn("PHYS tidak ditemukan") return end
-warn("PHYS OK: x=",phys.x,"y=",phys.y)
+warn("PHYS OK x=",phys.x,"y=",phys.y)
 
--- Fly dengan Heartbeat (jauh lebih cepat dari task.wait)
-local Fly = {On=false, TargetY=phys.y, TargetX=nil, Speed=5}
-local conn = RS.Heartbeat:Connect(function()
-   if not Fly.On or not phys then return end
-   phys.y = Fly.TargetY        -- kunci Y
-   phys.vy = 0                 -- cegah velocity akumulasi
-   phys.grounded = false
-   if Fly.TargetX then
-      phys.x = Fly.TargetX    -- kunci X (opsional)
-      phys.vx = 0
+-- Fly state
+local Fly = {On=false, TargetY=phys.y}
+
+-- Pasang __newindex untuk intercept semua write ke phys
+local mt = {}
+pcall(function() mt = getrawmetatable(phys) or {} end)
+local orig = rawget(mt,"__newindex")
+mt.__newindex = function(t, k, v)
+   if Fly.On then
+      if k=="vy" then rawset(t,k,0) return end  -- cegah gravity
+      if k=="y"  then rawset(t,k,Fly.TargetY) return end  -- kunci Y
+      if k=="grounded" then rawset(t,k,false) return end   -- jangan snap ke ground
    end
-end)
+   if orig then orig(t,k,v) else rawset(t,k,v) end
+end
+pcall(setrawmetatable, phys, mt)
+warn("Metatable dipasang")
 
 -- Tes hover
-warn("TES HOVER 5 detik (Y=",phys.y,")")
-Fly.TargetY = phys.y
+warn("TES HOVER 5 detik di Y=",phys.y)
+Fly.TargetY = phys.y - 2  -- sedikit angkat dari ground supaya tidak snap
 Fly.On = true
 task.wait(5)
 
--- Tes naik 5 tile
+-- Tes naik
 warn("TES NAIK ke Y=",phys.y-5)
 Fly.TargetY = phys.y - 5
-task.wait(3)
-
--- Tes hover di ketinggian baru
-warn("HOVER di ketinggian baru...")
-Fly.TargetY = phys.y
-task.wait(3)
+task.wait(4)
 
 -- Stop
 Fly.On = false
-conn:Disconnect()
-warn("SELESAI. Apakah karakter melayang dan naik?")
+warn("SELESAI - apakah karakter melayang?")
