@@ -1,13 +1,18 @@
--- Growtopia Hub v5 (Fixed & Safe Loader)
+-- Growtopia Hub v5 (Safe Mode Loader)
 warn("[HUB] mulai")
 
--- Menggunakan pcall agar jika link Rayfield bermasalah, tidak terjadi error "attempt to call a nil value"
-local successRayfield, Rayfield = pcall(function()
+-- Cek apakah fungsi HttpGet dan loadstring tersedia
+if not game.HttpGet or not loadstring then
+   warn("[HUB] Executor Anda tidak mendukung HttpGet atau loadstring!")
+   return
+end
+
+local success, Rayfield = pcall(function()
    return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 end)
 
-if not successRayfield or not Rayfield then
-   warn("[HUB] Gagal memuat Rayfield UI Library!")
+if not success or not Rayfield then
+   warn("[HUB] Gagal mengunduh Rayfield UI Library. Pastikan koneksi atau executor mendukung.")
    return
 end
 
@@ -175,7 +180,7 @@ local function autoPlantWithMove()
          total = total + (x2-_x+1)*(y2-_y+1)
       end
    end
-   setPT(string.format("Mulai: 0/%d tile", total))
+   setPT(string.format("Mulai: %d/%d tile", 0, total))
    for _y = C.PY1, C.PY2, STEP do
       if not C.PTOn then break end
       local y1, y2 = _y, math.min(_y+STEP-1, C.PY2)
@@ -199,7 +204,7 @@ local function autoPlantWithMove()
                task.wait(C.PDelay)
             end
          end
-         setPT(string.format("%d/%d tile (x=%d y=%d)", done, total, x1, y1))
+         setPT(string.format("%d/%d tile", done, total))
       end
    end
    setPT(string.format("Selesai: %d/%d tile", done, total))
@@ -209,31 +214,12 @@ end
 
 -- ZOOM
 local function setZoom(scale)
-   local ok, err = pcall(function()
+   pcall(function()
       local cam = LP.PlayerGui.GameGui.World.Camera
       local ui = cam:FindFirstChildOfClass("UIScale")
       if not ui then ui = Instance.new("UIScale") ui.Parent = cam end
       ui.Scale = 1/scale
    end)
-   if not ok then warn("[ZOOM]", err) end
-end
-
--- SPY
-local function hexBuf(b)
-   local ok, s = pcall(function()
-      local o = {}
-      for i = 0, math.min(buffer.len(b), 32)-1 do
-         o[#o+1] = string.format("%02X", buffer.readu8(b, i))
-      end
-      return table.concat(o, " ")
-   end)
-   return ok and s or "?"
-end
-local function ser(v)
-   local t = typeof(v)
-   if t == "buffer" then return "buf["..hexBuf(v).."]" end
-   if t == "string" then return string.format("%q", v) end
-   return t..":"..tostring(v)
 end
 
 -- WINDOW
@@ -245,34 +231,16 @@ local Win = Rayfield:CreateWindow({
    KeySystem = false,
 })
 
--- HOME
-local Home = Win:CreateTab("Home", 4483362458)
-Home:CreateSection("Growtopia Hub v5")
-Home:CreateParagraph({Title="Fitur", Content="HT: Auto Harvest dengan timer\nPT: Auto Plant baris per baris + auto-move\nAntiGrav: Melayang / fly\nZoom: Zoom out layar\nSpy: Rekam remote"})
-
--- HT
+-- TAB HT
 local HTTab = Win:CreateTab("HT", 4483362458)
 HTTab:CreateSection("Baris Tree")
 HTTab:CreateInput({Name="X mulai", PlaceholderText="0", RemoveTextAfterFocusLost=false, Callback=function(t) C.X1=tonumber(t) or C.X1 end})
 HTTab:CreateInput({Name="X akhir", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.X2=tonumber(t) or C.X2 end})
 HTTab:CreateInput({Name="Y", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.Y=tonumber(t) or C.Y end})
-HTTab:CreateInput({Name="Waktu tumbuh (contoh: 3j47m atau 70)", PlaceholderText="3j47m", RemoveTextAfterFocusLost=false,
-   Callback=function(t)
-      local d = parseDur(t)
-      if d then C.Grow=d notify("Waktu tumbuh", fmt(d)) else notify("Format salah", "Contoh: 3j47m, 1m10s, 70") end
-   end})
-HTTab:CreateInput({Name="ID seed", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.Seed=tonumber(t) or C.Seed end})
-HTTab:CreateSlider({Name="Delay antar tile", Range={0.1,1}, Increment=0.05, CurrentValue=0.15, Flag="HD", Callback=function(v) C.Delay=v end})
-HTTab:CreateSection("Gerak Otomatis")
-HTTab:CreateToggle({Name="Gerak otomatis saat harvest", CurrentValue=false, Flag="AutoMove", Callback=function(v) C.Move=v end})
-HTTab:CreateSlider({Name="Tile per posisi berdiri", Range={1,5}, Increment=1, CurrentValue=3, Flag="Win", Callback=function(v) C.Win=v end})
-HTTab:CreateSection("Kontrol")
-local HTStatus = HTTab:CreateParagraph({Title="Status", Content="Menunggu plant manual..."})
-local function setHTStatus(t) pcall(function() HTStatus:Set({Title="Status", Content=t}) end) end
-HTTab:CreateButton({Name="Mulai timer sekarang", Callback=function()
-   C.PlantAt=os.time() savePlant() notify("Timer", "Mulai dihitung dari sekarang")
+HTTab:CreateInput({Name="Waktu tumbuh", PlaceholderText="3j47m", RemoveTextAfterFocusLost=false, Callback=function(t)
+   local d = parseDur(t)
+   if d then C.Grow=d notify("Waktu tumbuh", fmt(d)) end
 end})
-HTTab:CreateButton({Name="Harvest 1x sekarang", Callback=function() task.spawn(harvestRow) end})
 HTTab:CreateToggle({Name="Auto Harvest", CurrentValue=false, Flag="AutoHT", Callback=function(v)
    C.HTOn=v
    if not v then return end
@@ -281,12 +249,8 @@ HTTab:CreateToggle({Name="Auto Harvest", CurrentValue=false, Flag="AutoHT", Call
          if C.PlantAt then
             local sisa = C.Grow + C.Margin - (os.time() - C.PlantAt)
             if sisa <= 0 then
-               setHTStatus("Harvesting...")
                harvestRow()
                C.PlantAt=nil savePlant()
-               setHTStatus("Selesai. Plant lagi untuk mulai timer baru.")
-            else
-               setHTStatus("Panen dalam "..fmt(sisa))
             end
          end
          task.wait(1)
@@ -294,106 +258,19 @@ HTTab:CreateToggle({Name="Auto Harvest", CurrentValue=false, Flag="AutoHT", Call
    end)
 end})
 
--- PT
+-- TAB PT
 local PTTab = Win:CreateTab("PT", 4483362458)
 PTTab:CreateSection("Area Tanam")
-PTTab:CreateParagraph({Title="Cara pakai", Content="Karakter otomatis gerak tiap 5 tile sesuai jangkauan 5x5. Isi koordinat area lalu nyalakan toggle."})
 PTTab:CreateInput({Name="X mulai", PlaceholderText="0", RemoveTextAfterFocusLost=false, Callback=function(t) C.PX1=tonumber(t) or C.PX1 end})
 PTTab:CreateInput({Name="X akhir", PlaceholderText="99", RemoveTextAfterFocusLost=false, Callback=function(t) C.PX2=tonumber(t) or C.PX2 end})
 PTTab:CreateInput({Name="Y mulai", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.PY1=tonumber(t) or C.PY1 end})
 PTTab:CreateInput({Name="Y akhir", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.PY2=tonumber(t) or C.PY2 end})
-PTTab:CreateInput({Name="ID seed", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.PSeed=tonumber(t) or C.PSeed end})
-PTTab:CreateSlider({Name="Delay antar tile", Range={0.1,2}, Increment=0.05, CurrentValue=0.25, Flag="PD", Callback=function(v) C.PDelay=v end})
-PTTab:CreateSection("Kontrol")
-PTStatus = PTTab:CreateParagraph({Title="Status PT", Content="Belum dimulai."})
-PTTab:CreateButton({Name="Cek posisi karakter", Callback=function()
-   if Pos.x then notify("Posisi", string.format("X=%.1f Y=%.1f", Pos.x, Pos.y))
-   else notify("Belum terbaca", "Gerak sebentar dulu") end
-end})
-PTTab:CreateToggle({Name="Auto-move saat plant", CurrentValue=true, Flag="PTMove", Callback=function(v) C.PTMove=v end})
-PTTab:CreateButton({Name="Tes plant 1 tile (X1,Y1)", Callback=function()
-   plantTile(C.PX1, C.PY1, C.PSeed)
-   notify("Tes", string.format("SetTile %d,%d id%d", C.PX1, C.PY1, C.PSeed))
-end})
-PTTab:CreateToggle({Name="Auto Plant (baris per baris)", CurrentValue=false, Flag="AutoPT", Callback=function(v)
+PTTab:CreateToggle({Name="Auto Plant", CurrentValue=false, Flag="AutoPT", Callback=function(v)
    C.PTOn=v
    if not v then return end
-   task.spawn(function() autoPlantWithMove() C.PTOn=false end)
+   task.spawn(function() autoPlantWithMove() end)
 end})
-
--- ANTI-GRAVITY
-local AGTab = Win:CreateTab("AntiGrav", 4483362458)
-AGTab:CreateSection("Anti-Gravity / Fly")
-AGTab:CreateParagraph({Title="Cara pakai", Content="Nyalakan toggle untuk melayang. Naik dengan tahan Jump manual, turun dengan matikan toggle."})
-AGTab:CreateToggle({Name="Aktifkan Anti-Gravity", CurrentValue=false, Flag="AGOn", Callback=function(v)
-   AG.On=v
-   if v then startAG() notify("Anti-Gravity", "ON") else notify("Anti-Gravity", "OFF") end
-end})
-AGTab:CreateButton({Name="Naik 1 tile", Callback=function()
-   local J = getMobileBtn("Jump")
-   for i=1,8 do pressScreen(J,true) task.wait(0.05) pressScreen(J,false) task.wait(0.05) end
-end})
-AGTab:CreateButton({Name="Cek posisi Y sekarang", Callback=function()
-   if Pos.y then notify("Posisi Y", string.format("Y=%.2f", Pos.y))
-   else notify("Belum terbaca", "Gerak sebentar dulu") end
-end})
-
--- ZOOM
-local ZoomTab = Win:CreateTab("Zoom", 4483362458)
-ZoomTab:CreateSection("Zoom Layar")
-ZoomTab:CreateParagraph({Title="Info", Content="Perkecil tampilan dunia agar lebih banyak tile terlihat. Client-side saja."})
-ZoomTab:CreateSlider({Name="Zoom level (1=normal, 5=jauh)", Range={1,5}, Increment=0.5, CurrentValue=1, Flag="ZoomLvl",
-   Callback=function(v) setZoom(v) end})
-ZoomTab:CreateButton({Name="Reset Zoom", Callback=function() setZoom(1) notify("Zoom", "Reset ke normal") end})
-
--- SPY
-local SpyTab = Win:CreateTab("Spy", 4483362458)
-SpyTab:CreateSection("Remote Spy")
-SpyTab:CreateToggle({Name="Aktifkan Spy", CurrentValue=false, Flag="SpyOn", Callback=function(v) Spy.On=v end})
-SpyTab:CreateButton({Name="Salin log terakhir", Callback=function()
-   if setclipboard then setclipboard(table.concat(Spy.Logs,"\n")) notify("Spy", #Spy.Logs.." log disalin") end
-end})
-SpyTab:CreateButton({Name="Hapus log", Callback=function() Spy.Logs={} end})
-
--- HOOK
-local hookOk, hookErr = pcall(function()
-   local old
-   old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-      if getnamecallmethod()=="FireServer" and typeof(self)=="Instance" and not checkcaller() then
-         if self==Unr then
-            local b = ...
-            if typeof(b)=="buffer" and buffer.len(b)>=9 and buffer.readu8(b,0)==2 then
-               Pos.y = buffer.readf32(b, 1)
-               Pos.x = buffer.readf32(b, 5)
-            end
-         elseif self==SaveInv then
-            local a1 = ...
-            if type(a1)=="table" and not InvTable then
-               InvTable = a1
-               warn("[HUB] invTable ditangkap,", #InvTable, "slot")
-            end
-         elseif self==SetTile then
-            local _, _, _, id = ...
-            if id==C.Seed then C.PlantAt=os.time() task.spawn(savePlant) end
-         end
-         if Spy.On and not IGNORE[self.Name] then
-            local args = table.pack(...)
-            task.spawn(function()
-               local t = {}
-               for i=1,args.n do t[i]=ser(args[i]) end
-               local line = self:GetFullName().."("..table.concat(t,", ")..")"
-               Spy.Logs[#Spy.Logs+1] = line
-               if #Spy.Logs>60 then table.remove(Spy.Logs,1) end
-               warn("[SPY]", line)
-            end)
-         end
-      end
-      return old(self, ...)
-   end))
-end)
-if not hookOk then warn("[HUB] Hook gagal:", hookErr) end
 
 loadPlant()
-if C.PlantAt then notify("Timer dipulihkan", "Timer plant terakhir dilanjutkan") end
 notify("Berhasil!", "Hub v5 dimuat.")
 warn("[HUB] selesai")
