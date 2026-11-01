@@ -121,16 +121,55 @@ local function goToY(ty)
    return math.abs(ty - Pos.y) <= C.Tol*2
 end
 
--- ANTI-GRAVITY
+-- ANTI-GRAVITY (hover stabil: jump hanya saat jatuh di bawah target Y)
 local function startAG()
+   AG.TargetY = Pos.y  -- simpan ketinggian saat ini sebagai target hover
    task.spawn(function()
       local J = getMobileBtn("Jump")
       if not J then warn("[AG] Jump button tidak ditemukan") return end
       while AG.On do
-         pressScreen(J, true) task.wait(0.06) pressScreen(J, false)
-         task.wait(0.18)
+         -- update target kalau pengguna naik manual (biar tidak balik turun)
+         if Pos.y and AG.TargetY and Pos.y < AG.TargetY - 0.3 then
+            AG.TargetY = Pos.y  -- update target ke posisi lebih tinggi
+         end
+         -- jump hanya saat karakter jatuh lebih dari 0.4 tile di bawah target
+         if Pos.y and AG.TargetY and Pos.y > AG.TargetY + 0.4 then
+            pressScreen(J, true) task.wait(0.06) pressScreen(J, false)
+         end
+         task.wait(0.08)
       end
    end)
+end
+
+local function flyToY(targetY)
+   -- naik/turun ke Y tertentu dengan AntiGrav aktif
+   if not Pos.y then notify("Fly", "Posisi belum terbaca, gerak dulu") return end
+   local J = getMobileBtn("Jump")
+   if not J then return end
+   local R = getMobileBtn("Right")
+   if Pos.y > targetY then
+      -- perlu naik (Y berkurang), spam jump
+      notify("Fly", string.format("Naik ke Y=%.0f...", targetY))
+      while Pos.y > targetY + 0.5 do
+         if not AG.On then break end
+         pressScreen(J, true) task.wait(0.05) pressScreen(J, false)
+         task.wait(0.1)
+      end
+   else
+      -- perlu turun (Y bertambah), matikan AG sementara
+      notify("Fly", string.format("Turun ke Y=%.0f...", targetY))
+      local wasOn = AG.On
+      AG.On = false
+      task.wait(0.1)
+      while Pos.y < targetY - 0.5 do
+         pressScreen(R, true) task.wait(0.1) pressScreen(R, false)
+         task.wait(0.2)
+      end
+      AG.On = wasOn
+      if wasOn then startAG() end
+   end
+   AG.TargetY = targetY
+   notify("Fly", string.format("Sampai di Y=%.1f", Pos.y))
 end
 
 -- HARVEST
@@ -315,17 +354,41 @@ end})
 -- ANTI-GRAVITY
 local AGTab = Win:CreateTab("AntiGrav", 4483362458)
 AGTab:CreateSection("Anti-Gravity / Fly")
-AGTab:CreateParagraph({Title="Cara pakai", Content="Nyalakan toggle untuk melayang. Naik dengan tahan Jump manual, turun dengan matikan toggle."})
+AGTab:CreateParagraph({Title="Cara pakai",
+   Content="1) Nyalakan AntiGrav.\n2) Naik ke ketinggian yang diinginkan (tahan Jump manual atau pakai Naik/Turun).\n3) Ketinggian itu otomatis dijaga, karakter tidak jatuh.\n4) Jalankan Auto Plant di tab PT dengan Y sesuai ketinggian.\n5) Matikan untuk kembali jatuh."})
 AGTab:CreateToggle({Name="Aktifkan Anti-Gravity", CurrentValue=false, Flag="AGOn", Callback=function(v)
-   AG.On=v
-   if v then startAG() notify("Anti-Gravity", "ON") else notify("Anti-Gravity", "OFF") end
+   AG.On = v
+   if v then
+      AG.TargetY = Pos.y
+      startAG()
+      notify("AntiGrav ON", Pos.y and string.format("Hover di Y=%.1f", Pos.y) or "Aktif")
+   else
+      notify("AntiGrav OFF", "Gravitasi normal")
+   end
+end})
+AGTab:CreateSection("Kontrol Ketinggian")
+local FlyTargetY = 30
+AGTab:CreateInput({Name="Target Y (tile)", PlaceholderText="30", RemoveTextAfterFocusLost=false,
+   Callback=function(t) FlyTargetY = tonumber(t) or FlyTargetY end})
+AGTab:CreateButton({Name="Terbang ke Target Y", Callback=function()
+   if not AG.On then notify("AntiGrav", "Nyalakan AntiGrav dulu") return end
+   task.spawn(flyToY, FlyTargetY)
 end})
 AGTab:CreateButton({Name="Naik 1 tile", Callback=function()
    local J = getMobileBtn("Jump")
-   for i=1,8 do pressScreen(J,true) task.wait(0.05) pressScreen(J,false) task.wait(0.05) end
+   for i=1,10 do pressScreen(J,true) task.wait(0.04) pressScreen(J,false) task.wait(0.04) end
+   if AG.On then AG.TargetY = Pos.y end
+end})
+AGTab:CreateButton({Name="Turun 1 tile (matikan AG sebentar)", Callback=function()
+   AG.On = false task.wait(0.5)
+   local R = getMobileBtn("Right")
+   pressScreen(R,true) task.wait(0.3) pressScreen(R,false)
+   task.wait(0.4)
+   AG.On = true AG.TargetY = Pos.y startAG()
 end})
 AGTab:CreateButton({Name="Cek posisi Y sekarang", Callback=function()
-   if Pos.y then notify("Posisi Y", string.format("Y=%.2f", Pos.y))
+   if Pos.y then
+      notify("Posisi", string.format("Y=%.2f (target hover=%.2f)", Pos.y, AG.TargetY or -1))
    else notify("Belum terbaca", "Gerak sebentar dulu") end
 end})
 
