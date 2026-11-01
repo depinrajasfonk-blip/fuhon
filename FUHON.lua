@@ -1,78 +1,91 @@
+-- Fly v2: cari phys table + hook physics loop
+local RS = game:GetService("RunService")
 local RSvc = game:GetService("ReplicatedStorage")
 local Unr = RSvc:FindFirstChild("ByteNetUnreliable")
+local VIM = game:GetService("VirtualInputManager")
+local GS = game:GetService("GuiService")
+local LP = game:GetService("Players").LocalPlayer
 
--- Cari phys table
-local phys = nil
-local old
-pcall(function()
-   old = hookmetamethod(game,"__namecall",newcclosure(function(self,...)
-      if self==Unr and getnamecallmethod()=="FireServer" and not phys and not checkcaller() then
-         for level=1,10 do
-            local ok,fn=pcall(debug.getinfo,level,"f")
-            if not ok or not fn then break end
-            local f=fn.func
-            if type(f)=="function" and islclosure(f) then
-               local ok2,ups=pcall(getupvalues,f)
-               if ok2 and type(ups)=="table" then
-                  for _,v in pairs(ups) do
-                     if type(v)=="table" and rawget(v,"vy")~=nil and rawget(v,"y")~=nil then
-                        phys=v break
-                     end
-                  end
-               end
-            end
-            if phys then break end
-         end
-      end
-      return old(self,...)
-   end))
-end)
-
--- Trigger hook
-local gui=game:GetService("Players").LocalPlayer.PlayerGui
-local MG=gui:FindFirstChild("MobileGui")
-local R=MG and MG:FindFirstChild("Right")
-local VIM=game:GetService("VirtualInputManager")
-local GS=game:GetService("GuiService")
-if R then
-   local p,s=R.AbsolutePosition,R.AbsoluteSize
-   local x,y=p.X+s.X/2,p.Y+s.Y/2+GS:GetGuiInset().Y
-   VIM:SendMouseButtonEvent(x,y,0,true,game,0) task.wait(0.5)
+local function pressBtn(name, secs)
+   local gui = LP.PlayerGui:FindFirstChild("MobileGui")
+   local btn = gui and gui:FindFirstChild(name)
+   if not btn then return end
+   local p, s = btn.AbsolutePosition, btn.AbsoluteSize
+   local x, y = p.X+s.X/2, p.Y+s.Y/2+GS:GetGuiInset().Y
+   VIM:SendMouseButtonEvent(x,y,0,true,game,0)
+   task.wait(secs or 0.3)
    VIM:SendMouseButtonEvent(x,y,0,false,game,0)
 end
-task.wait(1)
-if not phys then warn("PHYS tidak ditemukan") return end
-warn("PHYS OK x=",phys.x,"y=",phys.y)
 
--- Fly state
-local Fly = {On=false, TargetY=phys.y}
-
--- Pasang __newindex untuk intercept semua write ke phys
-local mt = {}
-pcall(function() mt = getrawmetatable(phys) or {} end)
-local orig = rawget(mt,"__newindex")
-mt.__newindex = function(t, k, v)
-   if Fly.On then
-      if k=="vy" then rawset(t,k,0) return end  -- cegah gravity
-      if k=="y"  then rawset(t,k,Fly.TargetY) return end  -- kunci Y
-      if k=="grounded" then rawset(t,k,false) return end   -- jangan snap ke ground
+-- Cari phys table lewat getgc saat karakter bergerak
+warn("[FLY2] mencari phys table...")
+local phys = nil
+for attempt = 1, 8 do
+   pressBtn("Right", 0.2)
+   task.wait(0.1)
+   for _, s in ipairs(getgc(true)) do
+      if type(s)=="table" and rawget(s,"vy")~=nil and rawget(s,"y")~=nil
+         and rawget(s,"vx")~=nil and rawget(s,"grounded")~=nil then
+         phys = s break
+      end
    end
-   if orig then orig(t,k,v) else rawset(t,k,v) end
+   if phys then break end
+   warn("[FLY2] attempt", attempt, "gagal, coba lagi...")
 end
-pcall(setrawmetatable, phys, mt)
-warn("Metatable dipasang")
 
--- Tes hover
-warn("TES HOVER 5 detik di Y=",phys.y)
-Fly.TargetY = phys.y - 2  -- sedikit angkat dari ground supaya tidak snap
+if not phys then warn("[FLY2] PHYS tidak ditemukan setelah 8 percobaan") return end
+warn("[FLY2] PHYS ditemukan! x=",phys.x,"y=",phys.y,"vy=",phys.vy)
+
+local Fly = {On=false, TargetY=phys.y, Speed=4}
+
+-- Pakai task.wait() tanpa argumen = next frame
+-- Ini lebih cepat dari Heartbeat connection
+local function flyLoop()
+   task.spawn(function()
+      while Fly.On do
+         if phys then
+            -- tulis Y dan vy tiap frame
+            phys.y = Fly.TargetY
+            phys.vy = 0
+            phys.vx = phys.vx  -- biarkan X movement normal
+            phys.grounded = false
+         end
+         task.wait()  -- tunggu 1 frame (tanpa delay)
+      end
+   end)
+end
+
+-- JUGA hook ByteNetUnreliable untuk paksa server lihat Y yang benar
+local hookOk = pcall(function()
+   local old2
+   old2 = hookmetamethod(game,"__namecall",newcclosure(function(self,...)
+      if self==Unr and getnamecallmethod()=="FireServer" and Fly.On then
+         local b = ...
+         if typeof(b)=="buffer" and buffer.len(b)>=9 and buffer.readu8(b,0)==2 then
+            -- paksa Y di buffer ke target kita
+            pcall(function() buffer.writef32(b, 1, Fly.TargetY) end)
+         end
+      end
+      return old2(self,...)
+   end))
+end)
+warn("[FLY2] buffer hook ok?", hookOk)
+
+-- TES
+warn("[FLY2] TES HOVER 6 detik di Y=", phys.y)
+Fly.TargetY = phys.y - 1  -- angkat 1 tile dari ground
 Fly.On = true
-task.wait(5)
+flyLoop()
+task.wait(6)
 
--- Tes naik
-warn("TES NAIK ke Y=",phys.y-5)
+warn("[FLY2] TES NAIK ke Y=", phys.y - 5)
 Fly.TargetY = phys.y - 5
 task.wait(4)
 
--- Stop
+warn("[FLY2] HOVER di Y baru=", phys.y)
+Fly.TargetY = phys.y
+task.wait(4)
+
 Fly.On = false
-warn("SELESAI - apakah karakter melayang?")
+warn("[FLY2] selesai. Apakah karakter melayang dan naik?")
+warn(string.format("[FLY2] posisi akhir: x=%.2f y=%.2f", phys.x, phys.y))
