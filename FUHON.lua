@@ -1,60 +1,84 @@
--- Tes exploit ToggleTile untuk anti-gravity
--- Jalankan dari LUAR area anti-gravity
-local RS = game:GetService("ReplicatedStorage")
-local Unr = RS:FindFirstChild("ByteNetUnreliable")
-local WR = RS:WaitForChild("WorldRemotes", 10)
-local ToggleTile = WR:FindFirstChild("ToggleTile")
+-- Tes fly via modifikasi phys.vy
+-- Jalankan di world mana pun
+local VIM = game:GetService("VirtualInputManager")
+local GS = game:GetService("GuiService")
+local LP = game:GetService("Players").LocalPlayer
 
-if not ToggleTile then
-   warn("[TT] WorldRemotes.ToggleTile tidak ditemukan!")
-   return
-end
-
--- Baca posisi Y dari ByteNetUnreliable
-local Pos = {x=nil, y=nil}
-pcall(function()
-   local old
-   old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-      if self==Unr and getnamecallmethod()=="FireServer" then
-         local b = ...
-         if typeof(b)=="buffer" and buffer.len(b)>=9 and buffer.readu8(b,0)==2 then
-            Pos.y = buffer.readf32(b, 1)
-            Pos.x = buffer.readf32(b, 5)
-         end
-      end
-      return old(self, ...)
-   end))
-end)
-
--- Tunggu posisi terbaca
-task.wait(2)
-warn(string.format("[TT] posisi sebelum: X=%.2f Y=%.2f", Pos.x or -1, Pos.y or -1))
-
-local yBefore = Pos.y
-
--- Panggil ToggleTile di koordinat anti-gravity block (dari log: 24, 37)
-warn("[TT] memanggil ToggleTile(24, 37)...")
-ToggleTile:FireServer(24, 37)
-task.wait(3)
-
-warn(string.format("[TT] posisi sesudah: X=%.2f Y=%.2f", Pos.x or -1, Pos.y or -1))
-local yAfter = Pos.y
-
-if yBefore and yAfter then
-   local diff = math.abs(yAfter - yBefore)
-   if diff < 0.3 then
-      warn("[TT] BERHASIL: Y stabil setelah ToggleTile, anti-gravity aktif!")
-   else
-      warn(string.format("[TT] Y berubah %.2f tile, anti-gravity tidak aktif", diff))
+-- Cari tabel physics
+local phys = nil
+for _, s in ipairs(getgc(true)) do
+   if type(s) == "table" and rawget(s,"vy") ~= nil and rawget(s,"grounded") ~= nil then
+      phys = s break
    end
 end
 
--- Coba juga koordinat lain (misal di dekat karakter)
-if Pos.x and Pos.y then
-   warn("[TT] mencoba ToggleTile di posisi karakter sendiri...")
-   ToggleTile:FireServer(math.floor(Pos.x), math.floor(Pos.y))
-   task.wait(3)
-   warn(string.format("[TT] Y setelah coba di posisi sendiri: %.2f", Pos.y or -1))
+if not phys then warn("[FLY] phys table tidak ditemukan") return end
+warn("[FLY] phys table ditemukan! vy=", phys.vy, "grounded=", phys.grounded)
+
+-- Cek semua field di phys (cari gravity)
+local gravField = nil
+for k, v in pairs(phys) do
+   warn("[PHYS FIELD]", k, "=", tostring(v), type(v))
+   if tostring(k):lower():find("grav") then gravField = k end
+end
+if gravField then warn("[FLY] gravity field:", gravField, "=", phys[gravField]) end
+
+-- Fly state
+local Fly = {On=false, Mode="hover", Speed=3}
+
+-- 3 mode:
+-- "hover": vy = 0 terus (diam di udara)
+-- "up": vy = -Speed (naik)
+-- "down": vy = Speed (turun)
+
+local function startFly()
+   task.spawn(function()
+      while Fly.On do
+         if Fly.Mode == "hover" then
+            phys.vy = 0
+            phys.grounded = false
+         elseif Fly.Mode == "up" then
+            phys.vy = -Fly.Speed
+            phys.grounded = false
+         elseif Fly.Mode == "down" then
+            phys.vy = Fly.Speed
+         end
+         task.wait(0.03)
+      end
+   end)
 end
 
-warn("[TT] selesai. Kirim screenshot ini ke chat.")
+-- Kalau ada gravity field, coba set ke 0 juga
+if gravField then
+   warn("[FLY] mencoba set", gravField, "= 0")
+   local orig = phys[gravField]
+   phys[gravField] = 0
+   task.wait(2)
+   warn("[FLY]", gravField, "setelah set:", phys[gravField])
+   phys[gravField] = orig -- kembalikan dulu
+end
+
+-- Tes hover dulu (5 detik)
+warn("[FLY] TES HOVER 5 detik...")
+Fly.On = true Fly.Mode = "hover"
+startFly()
+task.wait(5)
+
+-- Tes naik (3 detik)
+warn("[FLY] TES NAIK 3 detik...")
+Fly.Mode = "up" Fly.Speed = 5
+task.wait(3)
+
+-- Hover lagi
+warn("[FLY] HOVER lagi...")
+Fly.Mode = "hover"
+task.wait(3)
+
+-- Tes turun (3 detik)
+warn("[FLY] TES TURUN 3 detik...")
+Fly.Mode = "down" Fly.Speed = 3
+task.wait(3)
+
+-- Stop
+Fly.On = false
+warn("[FLY] selesai. Kirim screenshot posisi karakter ke chat.")
