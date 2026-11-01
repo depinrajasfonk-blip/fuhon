@@ -112,6 +112,20 @@ local function goToY(ty)
    return math.abs(ty-Pos.y)<=C.Tol*2
 end
 
+
+-- ====== ANTI-GRAVITY (jump terus supaya tidak jatuh) ======
+local AG={On=false}
+local function startAG()
+   task.spawn(function()
+      local J=getMobileBtn("Jump")
+      if not J then warn("[AG] tombol Jump tidak ditemukan") return end
+      while AG.On do
+         pressScreen(J,true) task.wait(0.06) pressScreen(J,false)
+         task.wait(0.18)
+      end
+   end)
+end
+
 -- ====== HARVEST ======
 local function harvestRow()
    local lo,hi=math.min(C.X1,C.X2),math.max(C.X1,C.X2)
@@ -184,21 +198,12 @@ local function autoPlantWithMove()
 end
 
 -- ====== ZOOM ======
-local ZoomOriginal=nil
 local function setZoom(scale)
    local ok,err=pcall(function()
-      local world=LP.PlayerGui.GameGui.World
-      if not ZoomOriginal then
-         ZoomOriginal={Size=world.Size,Position=world.Position}
-      end
-      if scale==1 then
-         world.Size=ZoomOriginal.Size
-         world.Position=ZoomOriginal.Position
-         return
-      end
-      -- perkecil world frame = zoom out
-      world.Size=UDim2.new(1/scale,0,1/scale,0)
-      world.Position=UDim2.new(0.5-0.5/scale,0,0.5-0.5/scale,0)
+      local cam=LP.PlayerGui.GameGui.World.Camera
+      local ui=cam:FindFirstChildOfClass("UIScale")
+      if not ui then ui=Instance.new("UIScale") ui.Parent=cam end
+      ui.Scale=1/scale
    end)
    if not ok then warn("[ZOOM]",err) end
 end
@@ -297,6 +302,27 @@ ZoomTab:CreateParagraph({Title="Info",Content="Zoom out memperkecil tampilan dun
 ZoomTab:CreateSlider({Name="Zoom level (1=normal, 3=jauh)",Range={1,5},Increment=0.5,CurrentValue=1,Flag="ZoomLvl",
    Callback=function(v) setZoom(v) end})
 ZoomTab:CreateButton({Name="Reset Zoom",Callback=function() setZoom(1) notify("Zoom","Reset ke normal") end})
+
+-- ANTI-GRAVITY
+local AGTab=Win:CreateTab("AntiGrav",4483362458)
+AGTab:CreateSection("Anti-Gravity / Fly")
+AGTab:CreateParagraph({Title="Cara pakai",Content="Nyalakan toggle, karakter akan terus jump sehingga tidak jatuh dan bisa melayang. Matikan untuk kembali ke gravitasi normal.
+
+Untuk naik: nyalakan, lalu tahan tombol Jump manual sebentar.
+Untuk turun: matikan, karakter jatuh normal."})
+AGTab:CreateToggle({Name="Aktifkan Anti-Gravity",CurrentValue=false,Flag="AGOn",Callback=function(v)
+   AG.On=v
+   if v then startAG() notify("Anti-Gravity","ON - karakter melayang") 
+   else notify("Anti-Gravity","OFF - gravitasi normal") end
+end})
+AGTab:CreateButton({Name="Naik 1 tile",Callback=function()
+   local J=getMobileBtn("Jump")
+   for i=1,8 do pressScreen(J,true) task.wait(0.05) pressScreen(J,false) task.wait(0.05) end
+end})
+AGTab:CreateButton({Name="Cek posisi Y sekarang",Callback=function()
+   if Pos.y then notify("Posisi Y",("Y=%.2f"):format(Pos.y))
+   else notify("Belum terbaca","Gerak sebentar dulu") end
+end})
 
 -- SPY
 local SpyTab=Win:CreateTab("Spy",4483362458)
