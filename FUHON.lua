@@ -22,6 +22,7 @@ local C = {
    X1=0, X2=3, Y=36, Delay=0.15, Grow=75, Margin=15, Seed=3,
    PlantAt=nil, HTOn=false, Move=false, Win=3, Tol=0.6,
    PX1=0, PX2=99, PY1=36, PY2=36, PSeed=3, PDelay=0.25, PTOn=false, PTMove=true,
+   Collect=true,  -- auto collect setelah harvest
    REACH=2,
 }
 local Pos = {x=nil, y=nil}
@@ -170,7 +171,25 @@ local function flyToY(targetY)
    notify("Fly", string.format("Menuju Y=%.1f (server)", targetY))
 end
 
--- HARVEST
+-- HARVEST + AUTO COLLECT SWEEP
+local SetBusy = WR and WR:FindFirstChild("SetBusy")
+
+local function collectSweep()
+   -- jalan dari X1 ke X2 lalu balik untuk ambil semua drop
+   if not C.Move then return end
+   local lo, hi = math.min(C.X1, C.X2), math.max(C.X1, C.X2)
+   if SetBusy then pcall(function() SetBusy:FireServer(1) end) end
+   -- jalan ke kiri dulu
+   goToX(lo + 0.5)
+   task.wait(0.3)
+   -- jalan ke kanan sambil collect
+   goToX(hi + 0.5)
+   task.wait(0.3)
+   -- jalan balik ke kiri sekali lagi (pastikan semua terkumpul)
+   goToX(lo + 0.5)
+   if SetBusy then pcall(function() SetBusy:FireServer(0) end) end
+end
+
 local function harvestRow()
    local lo, hi = math.min(C.X1, C.X2), math.max(C.X1, C.X2)
    local home = Pos.x
@@ -180,6 +199,11 @@ local function harvestRow()
       if C.Move then goToX((x+stop)/2 + 0.5) end
       for t = x, stop do SetTile:FireServer("fg", t, C.Y, 0) task.wait(C.Delay) end
       x = stop + 1
+   end
+   -- sweep collect setelah semua tile dipanen
+   if C.Collect then
+      task.wait(0.5) -- tunggu drop spawn
+      collectSweep()
    end
    if C.Move and home then goToX(home) end
 end
@@ -301,6 +325,8 @@ HTTab:CreateButton({Name="Mulai timer sekarang", Callback=function()
    C.PlantAt=os.time() savePlant() notify("Timer", "Mulai dihitung dari sekarang")
 end})
 HTTab:CreateButton({Name="Harvest 1x sekarang", Callback=function() task.spawn(harvestRow) end})
+HTTab:CreateToggle({Name="Auto Collect setelah harvest", CurrentValue=true, Flag="AutoCollect",
+   Callback=function(v) C.Collect=v end})
 HTTab:CreateToggle({Name="Auto Harvest", CurrentValue=false, Flag="AutoHT", Callback=function(v)
    C.HTOn=v
    if not v then return end
