@@ -21,8 +21,22 @@ end
 
 -- ====== KONFIGURASI PNB & HT ======
 local C = {
-   -- Konfigurasi PNB
-   X = 0, Y = 0, Item = 0, Delay = 0.3, On = false,
+   -- Konfigurasi PNB Grid (Matrix Offset dari Posisi Referensi / Last Place)
+   Item = 0, 
+   Delay = 0.3, 
+   On = false,
+   AutoCollect = false, -- Toggle Auto Collect saat PNB
+   
+   -- Grid Matrix 3x3 (Relatif terhadap titik referensi: dx, dy dari -1 sampai 1)
+   -- Contoh: [0,0] adalah titik pusat referensi
+   Grid = {
+      ["0,0"] = true,  -- Default titik pusat
+      ["0,-1"] = false, -- Atas
+      ["0,1"] = false,  -- Bawah
+      ["-1,0"] = false, -- Kiri
+      ["1,0"] = false,  -- Kanan
+   },
+
    -- Konfigurasi HT (Harvest)
    X1 = 0, X2 = 3, Y_HT = 36,   -- baris tree yang dipanen
    DelayHT = 0.15,              -- jeda antar tile HT
@@ -102,19 +116,52 @@ local function goTo(tx)
    return math.abs(tx - Pos.x) <= C.Tol * 2
 end
 
--- ====== LOGIKA PNB & HARVEST ======
-local function fire(id) 
-   SetTile:FireServer("fg", C.X, C.Y, id) 
+-- ====== FUNGSI AUTO COLLECT ======
+local function runAutoCollect()
+   if not C.AutoCollect then return end
+   pcall(function()
+      local character = LP.Character
+      if not character or not character:FindFirstChild("HumanoidRootPart") then return end
+      local rootPart = character.HumanoidRootPart
+
+      local dropsFolder = workspace:FindFirstChild("Drops") or workspace:FindFirstChild("Items") or workspace:FindFirstChild("DroppedItems")
+      if dropsFolder then
+         for _, item in ipairs(dropsFolder:GetChildren()) do
+            if not C.On or not C.AutoCollect then break end
+            local targetPart = nil
+            if item:IsA("BasePart") then
+               targetPart = item
+            elseif item:IsA("Model") then
+               targetPart = item.PrimaryPart or item:FindFirstChildWhichIsA("BasePart")
+            end
+
+            if targetPart then
+               local distance = (rootPart.Position - targetPart.Position).Magnitude
+               if distance <= 14 then
+                  local oldPos = rootPart.CFrame
+                  rootPart.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 2, 0))
+                  task.wait(0.03)
+                  rootPart.CFrame = oldPos
+               end
+            end
+         end
+      end
+   end)
 end
 
-local function brk()
+-- ====== LOGIKA PNB & HARVEST ======
+local function fireAt(x, y, id) 
+   SetTile:FireServer("fg", x, y, id) 
+end
+
+local function brkAt(x, y)
    if Recipe and Reliable then
       for _, s in ipairs(Recipe) do
          Reliable:FireServer(buffer.fromstring(s))
-         task.wait(0.05)
+         task.wait(0.03)
       end
    end
-   fire(0)
+   SetTile:FireServer("fg", x, y, 0)
 end
 
 local function harvestRow()
@@ -170,41 +217,79 @@ local HomeTab = Win:CreateTab("Home", 4483362458)
 HomeTab:CreateSection("Selamat Datang")
 HomeTab:CreateParagraph({
    Title = "Panduan Singkat",
-   Content = "Gunakan Tab PNB untuk tempat pecah block otomatis, Tab HT untuk panen otomatis dengan timer/gerak, dan Tab Tools untuk memuat skrip tambahan."
+   Content = "Gunakan Tab PNB untuk memilih petak grid relatif, menyalakan auto collect, dan panen otomatis di Tab HT."
 })
 
--- 2. TAB PNB
+-- 2. TAB PNB (Dengan Grid Selector & Auto Collect)
 local PNBTab = Win:CreateTab("PNB", 4483362458)
-PNBTab:CreateSection("Pengaturan PNB")
+PNBTab:CreateSection("Referensi & Lokasi PNB")
 
-PNBTab:CreateButton({Name = "Ambil dari place terakhir", Callback = function()
+PNBTab:CreateButton({Name = "Ambil referensi dari place terakhir", Callback = function()
    if not Last then
-      notify("Belum ada", "Place 1 block manual dulu")
+      notify("Belum ada", "Place 1 block manual dulu di dunia!")
       return
    end
-   C.X, C.Y, C.Item = Last.x, Last.y, Last.id
-   notify("Tersimpan", C.X .. "," .. C.Y .. " item " .. C.Item)
+   C.Item = Last.id
+   notify("Tersimpan", "Titik Referensi: (" .. Last.x .. ", " .. Last.y .. ") Item ID: " .. C.Item)
 end})
 
-PNBTab:CreateButton({Name = "Cek recipe break", Callback = function()
-   notify("Recipe", Recipe and (#Recipe .. " paket tersimpan") or "Belum ada, break manual dulu")
+PNBTab:CreateSection("Grid Pemilihan Tile (Relatif)")
+
+PNBTab:CreateToggle({Name = "Pusat (0, 0)", CurrentValue = C.Grid["0,0"], Flag = "G_00", Callback = function(v) C.Grid["0,0"] = v end})
+PNBTab:CreateToggle({Name = "Atas (0, -1)", CurrentValue = C.Grid["0,-1"], Flag = "G_01", Callback = function(v) C.Grid["0,-1"] = v end})
+PNBTab:CreateToggle({Name = "Bawah (0, 1)", CurrentValue = C.Grid["0,1"], Flag = "G_02", Callback = function(v) C.Grid["0,1"] = v end})
+PNBTab:CreateToggle({Name = "Kiri (-1, 0)", CurrentValue = C.Grid["-1,0"], Flag = "G_03", Callback = function(v) C.Grid["-1,0"] = v end})
+PNBTab:CreateToggle({Name = "Kanan (1, 0)", CurrentValue = C.Grid["1,0"], Flag = "G_04", Callback = function(v) C.Grid["1,0"] = v end})
+
+PNBTab:CreateButton({Name = "Pilih Semua (All)", Callback = function()
+   for k, _ in pairs(C.Grid) do C.Grid[k] = true end
+   notify("Grid", "Semua tile dipilih")
 end})
 
-PNBTab:CreateButton({Name = "Tes Place 1x", Callback = function() fire(C.Item) end})
-PNBTab:CreateButton({Name = "Tes Break 1x", Callback = function() brk() end})
+PNBTab:CreateButton({Name = "Bersihkan Grid (Clear)", Callback = function()
+   for k, _ in pairs(C.Grid) do C.Grid[k] = false end
+   notify("Grid", "Semua tile dibersihkan")
+end})
+
+PNBTab:CreateSection("Kontrol Eksekusi PNB")
+PNBTab:CreateToggle({Name = "Auto Collect saat PNB", CurrentValue = false, Flag = "AC",
+   Callback = function(v) C.AutoCollect = v end})
 
 PNBTab:CreateSlider({Name = "Delay (detik)", Range = {0.1, 1}, Increment = 0.05, CurrentValue = 0.3, Flag = "D",
    Callback = function(v) C.Delay = v end})
 
-PNBTab:CreateToggle({Name = "Auto PNB", CurrentValue = false, Flag = "PNB", Callback = function(v)
+PNBTab:CreateToggle({Name = "Auto PNB (Grid Loop)", CurrentValue = false, Flag = "PNB", Callback = function(v)
    C.On = v
    if v then
+      if not Last then
+         notify("Peringatan", "Ambil referensi dari place terakhir terlebih dahulu!")
+      end
       task.spawn(function()
          while C.On do
-            fire(C.Item)
-            task.wait(C.Delay / 2)
-            brk()
-            task.wait(C.Delay / 2)
+            if Last then
+               for coordStr, active in pairs(C.Grid) do
+                  if not C.On then break end
+                  if active then
+                     -- Parse relative offset string "dx,dy"
+                     local dx, dy = coordStr:match("([^,]+),([^,]+)")
+                     dx, dy = tonumber(dx), tonumber(dy)
+                     local tx = Last.x + dx
+                     local ty = Last.y + dy
+
+                     -- 1. Place Block di koordinat target grid
+                     fireAt(tx, ty, C.Item)
+                     task.wait(C.Delay / 2)
+
+                     -- 2. Break Block & auto-collect langsung
+                     brkAt(tx, ty)
+                     runAutoCollect()
+
+                     task.wait(C.Delay / 2)
+                  end
+               end
+            else
+               task.wait(1)
+            end
          end
       end)
    end
