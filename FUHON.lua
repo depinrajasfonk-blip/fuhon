@@ -23,6 +23,8 @@ local C = {
    PlantAt=nil, HTOn=false, Move=false, Win=3, Tol=0.6,
    PX1=0, PX2=99, PY1=36, PY2=36, PSeed=3, PDelay=0.25, PTOn=false, PTMove=true,
    Collect=true,  -- auto collect setelah harvest
+   -- PNB
+   PNBX=0, PNBY=36, PNBItem=4587, PNBDelay=0.3, PNBOn=false,
    REACH=2,
 }
 local Pos = {x=nil, y=nil}
@@ -208,6 +210,44 @@ local function harvestRow()
    if C.Move and home then goToX(home) end
 end
 
+-- PNB (Place & Break)
+local Reliable = RS:FindFirstChild("ByteNetReliable")
+local PNBRecipe = {}  -- paket ByteNetReliable sebelum break, diisi otomatis
+local PNBPending = {} -- buffer sementara
+
+local function fireSafe(remote, ...)
+   if not remote then return false end
+   local ok, err = pcall(remote.FireServer, remote, ...)
+   if not ok then warn("[PNB] error:", err) end
+   return ok
+end
+
+local function pnbPlace()
+   fireSafe(SetTile, "fg", C.PNBX, C.PNBY, C.PNBItem)
+end
+
+local function pnbBreak()
+   -- putar ulang recipe (paket ByteNetReliable sebelum break)
+   if #PNBRecipe > 0 and Reliable then
+      for _, s in ipairs(PNBRecipe) do
+         pcall(function() Reliable:FireServer(buffer.fromstring(s)) end)
+         task.wait(0.05)
+      end
+   end
+   fireSafe(SetTile, "fg", C.PNBX, C.PNBY, 0)
+end
+
+local function startPNBLoop()
+   task.spawn(function()
+      while C.PNBOn do
+         pnbPlace()
+         task.wait(C.PNBDelay / 2)
+         pnbBreak()
+         task.wait(C.PNBDelay / 2)
+      end
+   end)
+end
+
 -- PLANT
 local function plantTile(x, y, id)
    tryDecrement(id)
@@ -301,6 +341,50 @@ local Win = Rayfield:CreateWindow({
 local Home = Win:CreateTab("Home", 4483362458)
 Home:CreateSection("Growtopia Hub v5")
 Home:CreateParagraph({Title="Fitur", Content="HT: Auto Harvest dengan timer\nPT: Auto Plant baris per baris + auto-move\nAntiGrav: Melayang / fly\nZoom: Zoom out layar\nSpy: Rekam remote"})
+
+-- PNB
+local PNBTab = Win:CreateTab("PNB", 4483362458)
+PNBTab:CreateSection("Place & Break")
+PNBTab:CreateParagraph({Title="Cara pakai",
+   Content="1) Place 1 block manual di tile target.\n2) Tekan 'Ambil dari place terakhir'.\n3) Tes Place dan Break dulu.\n4) Nyalakan Auto PNB."})
+PNBTab:CreateButton({Name="Ambil dari place terakhir", Callback=function()
+   -- cari dari hook SetTile yang terakhir dipanggil manual
+   notify("PNB", string.format("Target: %d,%d item %d", C.PNBX, C.PNBY, C.PNBItem))
+end})
+PNBTab:CreateInput({Name="X tile", PlaceholderText="0", RemoveTextAfterFocusLost=false,
+   Callback=function(t) C.PNBX=tonumber(t) or C.PNBX end})
+PNBTab:CreateInput({Name="Y tile", PlaceholderText="36", RemoveTextAfterFocusLost=false,
+   Callback=function(t) C.PNBY=tonumber(t) or C.PNBY end})
+PNBTab:CreateInput({Name="Item ID (block yang mau di-PNB)", PlaceholderText="4587", RemoveTextAfterFocusLost=false,
+   Callback=function(t) C.PNBItem=tonumber(t) or C.PNBItem end})
+PNBTab:CreateSlider({Name="Delay satu siklus (detik)", Range={0.1,2}, Increment=0.05,
+   CurrentValue=0.3, Flag="PNBDelay", Callback=function(v) C.PNBDelay=v end})
+PNBTab:CreateSection("Kontrol")
+PNBTab:CreateButton({Name="Tes Place 1x", Callback=function()
+   pnbPlace()
+   notify("PNB", string.format("Place di %d,%d item %d", C.PNBX, C.PNBY, C.PNBItem))
+end})
+PNBTab:CreateButton({Name="Tes Break 1x", Callback=function()
+   pnbBreak()
+   notify("PNB", string.format("Break di %d,%d", C.PNBX, C.PNBY))
+end})
+PNBTab:CreateButton({Name="Rekam recipe break (break manual dulu)", Callback=function()
+   -- bersihkan pending dan mulai rekam
+   PNBPending = {}
+   PNBRecipe = {}
+   notify("PNB", "Break tile secara manual sekarang untuk merekam recipe!")
+   task.wait(3)
+   PNBRecipe = {}
+   for _, p in ipairs(PNBPending) do
+      if os.clock() - p.t < 2 then PNBRecipe[#PNBRecipe+1] = p.s end
+   end
+   notify("PNB", #PNBRecipe.." paket recipe terekam")
+end})
+PNBTab:CreateToggle({Name="Auto PNB", CurrentValue=false, Flag="AutoPNB",
+   Callback=function(v)
+      C.PNBOn = v
+      if v then startPNBLoop() end
+   end})
 
 -- HT
 local HTTab = Win:CreateTab("HT", 4483362458)
@@ -466,8 +550,30 @@ local hookOk, hookErr = pcall(function()
             end
          end
          if self==SetTile then
-            local _, _, _, id = ...
+            local _, sx, sy, id = ...
+            -- timer HT
             if id==C.Seed then C.PlantAt=os.time() task.spawn(savePlant) end
+            -- PNB: tangkap posisi place terakhir yang manual
+            if id and id~=0 and type(sx)=="number" then
+               C.PNBX=sx C.PNBY=sy C.PNBItem=id
+            end
+            -- PNB: saat break manual (id=0), simpan recipe dari pending
+            if id==0 then
+               local r={}
+               for _, p in ipairs(PNBPending) do
+                  if os.clock()-p.t < 2 then r[#r+1]=p.s end
+               end
+               if #r>0 then PNBRecipe=r warn("[PNB] recipe auto-terekam:", #r, "paket") end
+               PNBPending={}
+            end
+         end
+         -- rekam ByteNetReliable untuk recipe break
+         if self==Reliable and not checkcaller() then
+            local b=...
+            if typeof(b)=="buffer" then
+               PNBPending[#PNBPending+1]={t=os.clock(), s=buffer.tostring(b)}
+               if #PNBPending>30 then table.remove(PNBPending,1) end
+            end
          end
          if Spy.On and not IGNORE[self.Name] then
             local args = table.pack(...)
