@@ -146,28 +146,28 @@ local function findPhys()
    return nil
 end
 
+-- ServerY: posisi Y yang dikirim ke server (digeser gradual)
+-- Pos.y: posisi Y real client (dibaca dari buffer)
+local ServerY = nil
+local MAX_STEP = 0.4  -- max perubahan Y per frame (tile/frame)
+
 local function startAG()
-   PhysTable = findPhys()
-   if not PhysTable then
-      notify("Fly", "Phys table tidak ditemukan, coba rejoin")
-      AG.On = false return
-   end
-   notify("Fly ON", string.format("Hover di Y=%.1f", PhysTable.y))
-   AG.TargetY = PhysTable.y
+   -- inisialisasi ServerY dari posisi sekarang
+   ServerY = Pos.y or 37
+   AG.TargetY = ServerY
+   notify("Fly ON", string.format("ServerY=%.1f, set Target Y lalu tekan Terbang", ServerY))
 
    if FlyConn then FlyConn:Disconnect() end
-   FlyConn = game:GetService("RunService").RenderStepped:Connect(function()
-      if not AG.On or not PhysTable then return end
-      PhysTable.y = AG.TargetY
-      PhysTable.vy = 0
-      PhysTable.grounded = false
+   -- juga coba modifikasi phys table sebagai bonus
+   task.spawn(function()
+      PhysTable = findPhys()
+      if PhysTable then warn("[FLY] PhysTable ditemukan sebagai bonus") end
    end)
 end
 
 local function flyToY(targetY)
-   if not PhysTable then notify("Fly", "Aktifkan Fly dulu") return end
    AG.TargetY = targetY
-   notify("Fly", string.format("Pindah ke Y=%.1f", targetY))
+   notify("Fly", string.format("Menuju Y=%.1f (server)", targetY))
 end
 
 -- HARVEST
@@ -385,7 +385,9 @@ AGTab:CreateButton({Name="Turun 1 tile (matikan AG sebentar)", Callback=function
 end})
 AGTab:CreateButton({Name="Cek posisi Y sekarang", Callback=function()
    if Pos.y then
-      notify("Posisi", string.format("Y=%.2f (target hover=%.2f)", Pos.y, AG.TargetY or -1))
+      notify("Posisi",
+         string.format("Client Y=%.1f\nServer Y=%.1f\nTarget=%.1f",
+            Pos.y, ServerY or Pos.y, AG.TargetY or Pos.y))
    else notify("Belum terbaca", "Gerak sebentar dulu") end
 end})
 
@@ -416,6 +418,18 @@ local hookOk, hookErr = pcall(function()
             if typeof(b)=="buffer" and buffer.len(b)>=9 and buffer.readu8(b,0)==2 then
                Pos.y = buffer.readf32(b, 1)
                Pos.x = buffer.readf32(b, 5)
+               -- Fly: geser ServerY gradual ke target, lalu tulis ke buffer
+               if AG.On and AG.TargetY then
+                  if ServerY == nil then ServerY = Pos.y end
+                  local dy = AG.TargetY - ServerY
+                  if math.abs(dy) > 0.01 then
+                     local step = math.min(math.abs(dy), MAX_STEP)
+                     ServerY = ServerY + (dy > 0 and step or -step)
+                  else
+                     ServerY = AG.TargetY
+                  end
+                  pcall(function() buffer.writef32(b, 1, ServerY) end)
+               end
             end
          end
          if self==SaveInv then
