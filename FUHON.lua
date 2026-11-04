@@ -1,4 +1,3 @@
--- Growtopia Hub v5 (HT + PT auto-move + AntiGrav + Zoom + Spy)
 warn("[HUB] mulai")
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
@@ -6,593 +5,396 @@ local RS = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local VIM = game:GetService("VirtualInputManager")
 local GS = game:GetService("GuiService")
+local UIS = game:GetService("UserInputService")
 local LP = Players.LocalPlayer
+
 local WR = RS:WaitForChild("WorldRemotes", 10)
 local SetTile = WR and WR:WaitForChild("SetTile", 10)
+local Reliable = RS:FindFirstChild("ByteNetReliable")
 local Unr = RS:FindFirstChild("ByteNetUnreliable")
-local SaveInv = WR and WR:FindFirstChild("SaveInventory")
+local SetBusy = WR and WR:FindFirstChild("SetBusy")
 
 if not SetTile then
-   Rayfield:Notify({Title="Error", Content="Remote SetTile tidak ditemukan", Duration=6})
-   return
+   Rayfield:Notify({Title="Error", Content="SetTile tidak ditemukan", Duration=6}) return
 end
 
--- STATE
+-- ====== STATE ======
 local C = {
-   X1=0, X2=3, Y=36, Delay=0.15, Grow=75, Margin=15, Seed=3,
-   PlantAt=nil, HTOn=false, Move=false, Win=3, Tol=0.6,
-   PX1=0, PX2=99, PY1=36, PY2=36, PSeed=3, PDelay=0.25, PTOn=false, PTMove=true,
-   Collect=true,  -- auto collect setelah harvest
    -- PNB
-   PNBX=0, PNBY=36, PNBItem=4587, PNBDelay=0.3, PNBOn=false,
-   REACH=2,
+   X=0, Y=0, Item=0, Delay=0.3, PNBOn=false, Collect=true,
+   -- HT
+   X1=0, X2=3, Y_HT=36, DelayHT=0.15, Grow=75, Margin=15,
+   Seed=4587, PlantAt=nil, OnHT=false, Move=false, Win=3, Tol=0.6,
 }
 local Pos = {x=nil, y=nil}
-local InvTable = nil
-local AG = {On=false}
+local Last, Recipe, Pending = nil, {}, {}
 local Spy = {On=false, Logs={}}
 local IGNORE = {ByteNetUnreliable=true, SaveInventory=true}
-local SAVE = "gthub_plantat.txt"
+local SAVE = "growtopia_hub_plantat.txt"
+local BlockBroken = false   -- flag: server konfirmasi break
+local SelectMode = false    -- mode pilih tile dengan klik
 
--- UTIL
-local function notify(t, c)
-   Rayfield:Notify({Title=t, Content=c, Duration=4, Image=4483362458})
-end
-local function savePlant()
-   pcall(function() if writefile then writefile(SAVE, C.PlantAt and tostring(C.PlantAt) or "") end end)
-end
-local function loadPlant()
-   pcall(function() if isfile and isfile(SAVE) then C.PlantAt = tonumber(readfile(SAVE)) end end)
-end
+-- ====== UTIL ======
+local function notify(t, c) Rayfield:Notify({Title=t, Content=c, Duration=4, Image=4483362458}) end
+local function savePlant() pcall(function() if writefile then writefile(SAVE, C.PlantAt and tostring(C.PlantAt) or "") end end) end
+local function loadPlant() pcall(function() if isfile and isfile(SAVE) then C.PlantAt=tonumber(readfile(SAVE)) end end) end
 local function parseDur(text)
-   text = tostring(text):lower():gsub("%s", "")
-   local plain = tonumber(text)
-   if plain then return plain end
-   local total, found = 0, false
-   for num, unit in text:gmatch("(%d+%.?%d*)([a-z])") do
-      local m = (unit=="h" or unit=="j") and 3600 or unit=="m" and 60 or (unit=="s" or unit=="d") and 1 or nil
-      if m then total = total + tonumber(num)*m found = true end
+   text=tostring(text):lower():gsub("%s","")
+   local plain=tonumber(text) if plain then return plain end
+   local total,found=0,false
+   for num,unit in text:gmatch("(%d+%.?%d*)([a-z])") do
+      local m=(unit=="h"or unit=="j")and 3600 or unit=="m"and 60 or(unit=="s"or unit=="d")and 1 or nil
+      if m then total=total+tonumber(num)*m found=true end
    end
    return found and total or nil
 end
 local function fmt(sec)
-   sec = math.max(0, math.ceil(sec))
+   sec=math.max(0,math.ceil(sec))
    return string.format("%dj %dm %dd", sec//3600, (sec%3600)//60, sec%60)
 end
 
--- INVENTORY
-local function findSlot(id)
-   if not InvTable then return nil end
-   for _, s in pairs(InvTable) do if type(s)=="table" and s[1]==id then return s end end
-   return nil
+-- ====== GERAK ======
+local function pressBtn(btn, down)
+   local p,s=btn.AbsolutePosition,btn.AbsoluteSize
+   local x,y=p.X+s.X/2,p.Y+s.Y/2+GS:GetGuiInset().Y
+   VIM:SendMouseButtonEvent(x,y,0,down,game,0)
 end
-local function seedCount(id) local s = findSlot(id) return s and s[2] or -1 end
-local function tryDecrement(id) local s = findSlot(id) if s and s[2]>0 then s[2] = s[2]-1 end end
-
--- TOMBOL LAYAR
-local function getMobileBtn(name)
-   local gui = LP.PlayerGui:FindFirstChild("MobileGui")
-   return gui and gui:FindFirstChild(name)
-end
-local function pressScreen(btn, down)
-   if not btn then return end
-   local p, s = btn.AbsolutePosition, btn.AbsoluteSize
-   local x = p.X + s.X/2
-   local y = p.Y + s.Y/2 + GS:GetGuiInset().Y
-   VIM:SendMouseButtonEvent(x, y, 0, down, game, 0)
-end
-
--- GERAK X
-local function goToX(tx)
-   local L, R = getMobileBtn("Left"), getMobileBtn("Right")
-   if not (L and R and Pos.x) then return false end
-   for _ = 1, 20 do
-      local dx = tx - Pos.x
-      if math.abs(dx) <= C.Tol then return true end
-      local btn = dx > 0 and R or L
-      pressScreen(btn, true)
-      local t0 = os.clock()
-      while os.clock()-t0 < 0.6 do
+local function goTo(tx)
+   local gui=LP.PlayerGui:FindFirstChild("MobileGui")
+   local L,R=gui and gui:FindFirstChild("Left"),gui and gui:FindFirstChild("Right")
+   if not(L and R and Pos.x) then return false end
+   for _=1,12 do
+      local dx=tx-Pos.x if math.abs(dx)<=C.Tol then return true end
+      local btn=dx>0 and R or L
+      pressBtn(btn,true)
+      local t0=os.clock()
+      while os.clock()-t0<0.6 do
          task.wait(0.03)
-         local d2 = tx - Pos.x
-         if (dx>0 and d2<=C.Tol) or (dx<0 and d2>=-C.Tol) then break end
+         local d2=tx-Pos.x
+         if(dx>0 and d2<=C.Tol)or(dx<0 and d2>=-C.Tol)then break end
       end
-      pressScreen(btn, false)
-      task.wait(0.15)
+      pressBtn(btn,false) task.wait(0.25)
    end
-   return math.abs(tx - Pos.x) <= C.Tol*2
+   return math.abs(tx-Pos.x)<=C.Tol*2
 end
 
--- GERAK Y (jump naik, jatuh turun)
-local function jump()
-   local J = getMobileBtn("Jump")
-   pressScreen(J, true) task.wait(0.08) pressScreen(J, false)
-end
-local function goToY(ty)
-   if not Pos.y then return false end
-   for _ = 1, 30 do
-      local dy = ty - Pos.y
-      if math.abs(dy) <= C.Tol then return true end
-      if dy < 0 then
-         jump() task.wait(0.4)
-      else
-         local R = getMobileBtn("Right")
-         pressScreen(R, true) task.wait(0.15) pressScreen(R, false)
-         task.wait(0.3)
-      end
-   end
-   return math.abs(ty - Pos.y) <= C.Tol*2
+-- ====== KLIK PILIH TILE ======
+-- Hitung koordinat tile dari posisi layar
+local function screenToTile(screenX, screenY)
+   local ok, tiles = pcall(function()
+      return LP.PlayerGui.GameGui.World.Camera.Tiles
+   end)
+   if not ok or not tiles then return nil, nil end
+   local tp = tiles.AbsolutePosition
+   local TILE = 64
+   return math.floor((screenX - tp.X) / TILE),
+          math.floor((screenY - tp.Y) / TILE)
 end
 
--- FLY via phys.y (modifikasi tabel physics langsung)
-local PhysTable = nil
-local FlyConn = nil
-
-local function isPhys(t)
-   return type(t)=="table"
-      and rawget(t,"vy")~=nil and rawget(t,"y")~=nil
-      and rawget(t,"x")~=nil and rawget(t,"grounded")~=nil
-      and rawget(t,"vx")~=nil
-end
-
-local function findPhys()
-   -- coba getgc beberapa kali sambil tekan tombol
-   for attempt=1,8 do
-      pressScreen(getMobileBtn("Right"), true)
-      task.wait(0.15)
-      pressScreen(getMobileBtn("Right"), false)
-      task.wait(0.1)
-      for _,s in ipairs(getgc(true)) do
-         if isPhys(s) then return s end
-      end
-   end
-   return nil
-end
-
--- ServerY: posisi Y yang dikirim ke server (digeser gradual)
--- Pos.y: posisi Y real client (dibaca dari buffer)
-local ServerY = nil
-local MAX_STEP = 0.4  -- max perubahan Y per frame (tile/frame)
-
-local function startAG()
-   -- inisialisasi ServerY dari posisi sekarang
-   ServerY = Pos.y or 37
-   AG.TargetY = ServerY
-   notify("Fly ON", string.format("ServerY=%.1f, set Target Y lalu tekan Terbang", ServerY))
-
-   if FlyConn then FlyConn:Disconnect() end
-   -- juga coba modifikasi phys table sebagai bonus
-   task.spawn(function()
-      PhysTable = findPhys()
-      if PhysTable then warn("[FLY] PhysTable ditemukan sebagai bonus") end
+local TileInfoLabel  -- paragraph UI untuk update info tile terpilih
+local function updateTileInfo()
+   pcall(function()
+      TileInfoLabel:Set({
+         Title = "Tile Terpilih",
+         Content = string.format("X=%d  Y=%d  Item=%d\nRecipe: %d paket", C.X, C.Y, C.Item, #Recipe)
+      })
    end)
 end
 
-local function flyToY(targetY)
-   AG.TargetY = targetY
-   notify("Fly", string.format("Menuju Y=%.1f (server)", targetY))
-end
-
--- HARVEST + AUTO COLLECT SWEEP
-local SetBusy = WR and WR:FindFirstChild("SetBusy")
-
-local function collectSweep()
-   -- jalan dari X1 ke X2 lalu balik untuk ambil semua drop
-   if not C.Move then return end
-   local lo, hi = math.min(C.X1, C.X2), math.max(C.X1, C.X2)
-   if SetBusy then pcall(function() SetBusy:FireServer(1) end) end
-   -- jalan ke kiri dulu
-   goToX(lo + 0.5)
-   task.wait(0.3)
-   -- jalan ke kanan sambil collect
-   goToX(hi + 0.5)
-   task.wait(0.3)
-   -- jalan balik ke kiri sekali lagi (pastikan semua terkumpul)
-   goToX(lo + 0.5)
-   if SetBusy then pcall(function() SetBusy:FireServer(0) end) end
-end
-
-local function harvestRow()
-   local lo, hi = math.min(C.X1, C.X2), math.max(C.X1, C.X2)
-   local home = Pos.x
-   local x = lo
-   while x <= hi do
-      local stop = math.min(x + C.Win - 1, hi)
-      if C.Move then goToX((x+stop)/2 + 0.5) end
-      for t = x, stop do SetTile:FireServer("fg", t, C.Y, 0) task.wait(C.Delay) end
-      x = stop + 1
+UIS.InputBegan:Connect(function(input, gpe)
+   if not SelectMode then return end
+   local isClick = input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch
+   if not isClick then return end
+   local pos = input.Position
+   local tx, ty = screenToTile(pos.X, pos.Y)
+   if tx and ty then
+      C.X, C.Y = tx, ty
+      SelectMode = false
+      notify("Tile dipilih", string.format("X=%d  Y=%d", tx, ty))
+      updateTileInfo()
    end
-   -- sweep collect setelah semua tile dipanen
-   if C.Collect then
-      task.wait(0.5) -- tunggu drop spawn
-      collectSweep()
-   end
-   if C.Move and home then goToX(home) end
-end
+end)
 
--- PNB (Place & Break)
-local Reliable = RS:FindFirstChild("ByteNetReliable")
-local PNBRecipe = {}  -- paket ByteNetReliable sebelum break, diisi otomatis
-local PNBPending = {} -- buffer sementara
+-- ====== PNB ======
+local function fire(id) pcall(function() SetTile:FireServer("fg", C.X, C.Y, id) end) end
 
-local function fireSafe(remote, ...)
-   if not remote then return false end
-   local ok, err = pcall(remote.FireServer, remote, ...)
-   if not ok then warn("[PNB] error:", err) end
-   return ok
-end
-
-local function pnbPlace()
-   fireSafe(SetTile, "fg", C.PNBX, C.PNBY, C.PNBItem)
-end
-
-local function pnbBreak()
-   -- putar ulang recipe (paket ByteNetReliable sebelum break)
-   if #PNBRecipe > 0 and Reliable then
-      for _, s in ipairs(PNBRecipe) do
+local function brk()
+   if #Recipe > 0 and Reliable then
+      for _, s in ipairs(Recipe) do
          pcall(function() Reliable:FireServer(buffer.fromstring(s)) end)
          task.wait(0.05)
       end
    end
-   fireSafe(SetTile, "fg", C.PNBX, C.PNBY, 0)
+   fire(0)
 end
 
-local function startPNBLoop()
-   task.spawn(function()
-      while C.PNBOn do
-         pnbPlace()
-         task.wait(C.PNBDelay / 2)
-         pnbBreak()
-         task.wait(C.PNBDelay / 2)
-      end
-   end)
-end
-
--- PLANT
-local function plantTile(x, y, id)
-   tryDecrement(id)
-   SetTile:FireServer("fg", x, y, id)
-end
-
-local PTStatus
-local function setPT(t) pcall(function() PTStatus:Set({Title="Status PT", Content=t}) end) end
-
-local function autoPlantWithMove()
-   local STEP = C.REACH*2 + 1
-   local done, total = 0, 0
-   for _y = C.PY1, C.PY2, STEP do
-      local y2 = math.min(_y+STEP-1, C.PY2)
-      for _x = C.PX1, C.PX2, STEP do
-         local x2 = math.min(_x+STEP-1, C.PX2)
-         total = total + (x2-_x+1)*(y2-_y+1)
-      end
+-- Tunggu server konfirmasi block hancur (max timeout detik)
+local function waitBroken(timeout)
+   BlockBroken = false
+   local t0 = os.clock()
+   while not BlockBroken and os.clock()-t0 < timeout do
+      task.wait(0.05)
    end
-   setPT(string.format("Mulai: 0/%d tile", total))
-   for _y = C.PY1, C.PY2, STEP do
-      if not C.PTOn then break end
-      local y1, y2 = _y, math.min(_y+STEP-1, C.PY2)
-      local cy = math.floor((y1+y2)/2)
-      if C.PTMove then goToY(cy) end
-      for _x = C.PX1, C.PX2, STEP do
-         if not C.PTOn then break end
-         local x1, x2 = _x, math.min(_x+STEP-1, C.PX2)
-         local cx = math.floor((x1+x2)/2)
-         if C.PTMove then goToX(cx + 0.5) end
-         for py = y1, y2 do
-            for px = x1, x2 do
-               if not C.PTOn then return end
-               if InvTable and seedCount(C.PSeed) == 0 then
-                  C.PTOn = false
-                  setPT("Seed habis di tile "..px..","..py)
-                  notify("PT", "Seed habis") return
-               end
-               plantTile(px, py, C.PSeed)
-               done = done + 1
-               task.wait(C.PDelay)
-            end
-         end
-         setPT(string.format("%d/%d tile (x=%d y=%d)", done, total, x1, y1))
-      end
+   return BlockBroken
+end
+
+-- Auto Collect setelah break: jalan ke tile lalu kembali
+local function doCollect()
+   if not C.Collect or not Pos.x then return end
+   if SetBusy then pcall(function() SetBusy:FireServer(1) end) end
+   goTo(C.X + 0.5)
+   task.wait(0.3)
+   if SetBusy then pcall(function() SetBusy:FireServer(0) end) end
+end
+
+-- ====== HARVEST ======
+local function harvestRow()
+   local home=Pos.x
+   local lo,hi=math.min(C.X1,C.X2),math.max(C.X1,C.X2)
+   local x=lo
+   while x<=hi do
+      local stop=math.min(x+C.Win-1,hi)
+      if C.Move then goTo((x+stop)/2+0.5) end
+      for t=x,stop do SetTile:FireServer("fg",t,C.Y_HT,0) task.wait(C.DelayHT) end
+      x=stop+1
    end
-   setPT(string.format("Selesai: %d/%d tile", done, total))
-   C.PTOn = false
-   notify("PT", "Auto Plant selesai!")
+   if C.Move and home then goTo(home) end
 end
 
--- ZOOM
-local function setZoom(scale)
-   local ok, err = pcall(function()
-      local cam = LP.PlayerGui.GameGui.World.Camera
-      local ui = cam:FindFirstChildOfClass("UIScale")
-      if not ui then ui = Instance.new("UIScale") ui.Parent = cam end
-      ui.Scale = 1/scale
-   end)
-   if not ok then warn("[ZOOM]", err) end
-end
-
--- SPY
-local function hexBuf(b)
-   local ok, s = pcall(function()
-      local o = {}
-      for i = 0, math.min(buffer.len(b), 32)-1 do
-         o[#o+1] = string.format("%02X", buffer.readu8(b, i))
-      end
-      return table.concat(o, " ")
+-- ====== SPY HELPER ======
+local function hex(b)
+   local ok,s=pcall(function()
+      local out={}
+      for i=0,math.min(buffer.len(b),32)-1 do out[#out+1]=string.format("%02X",buffer.readu8(b,i)) end
+      return table.concat(out," ")
    end)
    return ok and s or "?"
 end
 local function ser(v)
-   local t = typeof(v)
-   if t == "buffer" then return "buf["..hexBuf(v).."]" end
-   if t == "string" then return string.format("%q", v) end
+   local t=typeof(v)
+   if t=="buffer" then return "buffer["..hex(v).."]" end
+   if t=="string" then return string.format("%q",v) end
    return t..":"..tostring(v)
 end
 
--- WINDOW
+-- ====== WINDOW ======
 local Win = Rayfield:CreateWindow({
-   Name = "Growtopia Hub v5",
-   LoadingTitle = "Memuat Hub...",
-   LoadingSubtitle = "oleh Pemula",
-   ConfigurationSaving = {Enabled=false},
-   KeySystem = false,
+   Name="Growtopia Script Hub",
+   LoadingTitle="Memuat Hub...",
+   LoadingSubtitle="oleh Pemula",
+   ConfigurationSaving={Enabled=false},
+   KeySystem=false,
 })
 
--- HOME
-local Home = Win:CreateTab("Home", 4483362458)
-Home:CreateSection("Growtopia Hub v5")
-Home:CreateParagraph({Title="Fitur", Content="HT: Auto Harvest dengan timer\nPT: Auto Plant baris per baris + auto-move\nAntiGrav: Melayang / fly\nZoom: Zoom out layar\nSpy: Rekam remote"})
+-- ====== HOME ======
+local HomeTab = Win:CreateTab("Home", 4483362458)
+HomeTab:CreateSection("Selamat Datang")
+HomeTab:CreateParagraph({Title="Panduan Singkat",
+   Content="PNB: klik tile di layar untuk pilih lokasi, lalu aktifkan.\nHT: auto harvest dengan timer.\nSpy: rekam remote."})
 
--- PNB
+-- ====== PNB ======
 local PNBTab = Win:CreateTab("PNB", 4483362458)
-PNBTab:CreateSection("Place & Break")
-PNBTab:CreateParagraph({Title="Cara pakai",
-   Content="1) Place 1 block manual di tile target.\n2) Tekan 'Ambil dari place terakhir'.\n3) Tes Place dan Break dulu.\n4) Nyalakan Auto PNB."})
-PNBTab:CreateButton({Name="Ambil dari place terakhir", Callback=function()
-   -- cari dari hook SetTile yang terakhir dipanggil manual
-   notify("PNB", string.format("Target: %d,%d item %d", C.PNBX, C.PNBY, C.PNBItem))
+PNBTab:CreateSection("Pilih Lokasi")
+
+TileInfoLabel = PNBTab:CreateParagraph({Title="Tile Terpilih", Content="Belum dipilih. Tekan tombol di bawah lalu klik tile di layar."})
+
+PNBTab:CreateButton({Name="[TAP] Pilih Tile dengan Klik Layar", Callback=function()
+   SelectMode = true
+   notify("Mode Pilih", "Klik tile di layar game sekarang!")
 end})
-PNBTab:CreateInput({Name="X tile", PlaceholderText="0", RemoveTextAfterFocusLost=false,
-   Callback=function(t) C.PNBX=tonumber(t) or C.PNBX end})
-PNBTab:CreateInput({Name="Y tile", PlaceholderText="36", RemoveTextAfterFocusLost=false,
-   Callback=function(t) C.PNBY=tonumber(t) or C.PNBY end})
-PNBTab:CreateInput({Name="Item ID (block yang mau di-PNB)", PlaceholderText="4587", RemoveTextAfterFocusLost=false,
-   Callback=function(t) C.PNBItem=tonumber(t) or C.PNBItem end})
-PNBTab:CreateSlider({Name="Delay satu siklus (detik)", Range={0.1,2}, Increment=0.05,
-   CurrentValue=0.3, Flag="PNBDelay", Callback=function(v) C.PNBDelay=v end})
-PNBTab:CreateSection("Kontrol")
+
+PNBTab:CreateButton({Name="Ambil dari place terakhir", Callback=function()
+   if not Last then notify("Belum ada","Place 1 block manual dulu") return end
+   C.X, C.Y, C.Item = Last.x, Last.y, Last.id
+   updateTileInfo()
+   notify("Tersimpan", string.format("%d,%d item %d", C.X, C.Y, C.Item))
+end})
+
+PNBTab:CreateSection("Tes & Info")
 PNBTab:CreateButton({Name="Tes Place 1x", Callback=function()
-   pnbPlace()
-   notify("PNB", string.format("Place di %d,%d item %d", C.PNBX, C.PNBY, C.PNBItem))
+   fire(C.Item)
+   notify("Place", string.format("Tile %d,%d item %d", C.X, C.Y, C.Item))
 end})
 PNBTab:CreateButton({Name="Tes Break 1x", Callback=function()
-   pnbBreak()
-   notify("PNB", string.format("Break di %d,%d", C.PNBX, C.PNBY))
+   brk()
+   notify("Break", string.format("Tile %d,%d | %d paket recipe", C.X, C.Y, #Recipe))
 end})
-PNBTab:CreateButton({Name="Rekam recipe break (break manual dulu)", Callback=function()
-   -- bersihkan pending dan mulai rekam
-   PNBPending = {}
-   PNBRecipe = {}
-   notify("PNB", "Break tile secara manual sekarang untuk merekam recipe!")
-   task.wait(3)
-   PNBRecipe = {}
-   for _, p in ipairs(PNBPending) do
-      if os.clock() - p.t < 2 then PNBRecipe[#PNBRecipe+1] = p.s end
-   end
-   notify("PNB", #PNBRecipe.." paket recipe terekam")
+PNBTab:CreateButton({Name="Cek Recipe", Callback=function()
+   notify("Recipe", #Recipe>0 and (#Recipe.." paket tersimpan") or "Belum ada, break manual dulu")
 end})
-PNBTab:CreateToggle({Name="Auto PNB", CurrentValue=false, Flag="AutoPNB",
-   Callback=function(v)
-      C.PNBOn = v
-      if v then startPNBLoop() end
-   end})
 
--- HT
-local HTTab = Win:CreateTab("HT", 4483362458)
-HTTab:CreateSection("Baris Tree")
-HTTab:CreateInput({Name="X mulai", PlaceholderText="0", RemoveTextAfterFocusLost=false, Callback=function(t) C.X1=tonumber(t) or C.X1 end})
-HTTab:CreateInput({Name="X akhir", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.X2=tonumber(t) or C.X2 end})
-HTTab:CreateInput({Name="Y", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.Y=tonumber(t) or C.Y end})
-HTTab:CreateInput({Name="Waktu tumbuh (contoh: 3j47m atau 70)", PlaceholderText="3j47m", RemoveTextAfterFocusLost=false,
-   Callback=function(t)
-      local d = parseDur(t)
-      if d then C.Grow=d notify("Waktu tumbuh", fmt(d)) else notify("Format salah", "Contoh: 3j47m, 1m10s, 70") end
-   end})
-HTTab:CreateInput({Name="ID seed", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.Seed=tonumber(t) or C.Seed end})
-HTTab:CreateSlider({Name="Delay antar tile", Range={0.1,1}, Increment=0.05, CurrentValue=0.15, Flag="HD", Callback=function(v) C.Delay=v end})
-HTTab:CreateSection("Gerak Otomatis")
-HTTab:CreateToggle({Name="Gerak otomatis saat harvest", CurrentValue=false, Flag="AutoMove", Callback=function(v) C.Move=v end})
-HTTab:CreateSlider({Name="Tile per posisi berdiri", Range={1,5}, Increment=1, CurrentValue=3, Flag="Win", Callback=function(v) C.Win=v end})
-HTTab:CreateSection("Kontrol")
-local HTStatus = HTTab:CreateParagraph({Title="Status", Content="Menunggu plant manual..."})
-local function setHTStatus(t) pcall(function() HTStatus:Set({Title="Status", Content=t}) end) end
-HTTab:CreateButton({Name="Mulai timer sekarang", Callback=function()
-   C.PlantAt=os.time() savePlant() notify("Timer", "Mulai dihitung dari sekarang")
-end})
-HTTab:CreateButton({Name="Harvest 1x sekarang", Callback=function() task.spawn(harvestRow) end})
-HTTab:CreateToggle({Name="Auto Collect setelah harvest", CurrentValue=true, Flag="AutoCollect",
+PNBTab:CreateSection("Kontrol")
+PNBTab:CreateSlider({Name="Delay satu siklus (detik)", Range={0.1,2}, Increment=0.05,
+   CurrentValue=0.3, Flag="D", Callback=function(v) C.Delay=v end})
+PNBTab:CreateToggle({Name="Auto Collect setelah Break", CurrentValue=true, Flag="PNBCollect",
    Callback=function(v) C.Collect=v end})
-HTTab:CreateToggle({Name="Auto Harvest", CurrentValue=false, Flag="AutoHT", Callback=function(v)
-   C.HTOn=v
-   if not v then return end
+
+local PNBStatus = PNBTab:CreateParagraph({Title="Status PNB", Content="Tidak aktif."})
+local function setPNBStatus(t) pcall(function() PNBStatus:Set({Title="Status PNB", Content=t}) end) end
+
+PNBTab:CreateToggle({Name="Auto PNB", CurrentValue=false, Flag="PNBOn", Callback=function(v)
+   C.PNBOn = v
+   if not v then setPNBStatus("Dihentikan.") return end
+   if C.Item == 0 then
+      notify("PNB","Item ID = 0! Pilih tile dulu atau place manual.")
+      C.PNBOn=false return
+   end
    task.spawn(function()
-      while C.HTOn do
-         if C.PlantAt then
-            local sisa = C.Grow + C.Margin - (os.time() - C.PlantAt)
-            if sisa <= 0 then
-               setHTStatus("Harvesting...")
-               harvestRow()
-               C.PlantAt=nil savePlant()
-               setHTStatus("Selesai. Plant lagi untuk mulai timer baru.")
-            else
-               setHTStatus("Panen dalam "..fmt(sisa))
-            end
+      local cycle = 0
+      while C.PNBOn do
+         cycle = cycle + 1
+         -- PLACE
+         fire(C.Item)
+         setPNBStatus(string.format("Siklus %d: Place %d,%d item %d", cycle, C.X, C.Y, C.Item))
+         task.wait(C.Delay / 2)
+         -- BREAK
+         brk()
+         setPNBStatus(string.format("Siklus %d: Break, menunggu konfirmasi...", cycle))
+         -- TUNGGU SERVER KONFIRMASI BLOCK HANCUR (max 1.5 detik)
+         local broken = waitBroken(1.5)
+         if not broken then
+            -- Kirim break sekali lagi kalau belum terkonfirmasi
+            brk()
+            waitBroken(1)
          end
-         task.wait(1)
+         -- AUTO COLLECT
+         if C.Collect then
+            task.spawn(doCollect)
+         end
+         task.wait(C.Delay / 2)
       end
+      setPNBStatus("Dihentikan.")
    end)
 end})
 
--- PT
-local PTTab = Win:CreateTab("PT", 4483362458)
-PTTab:CreateSection("Area Tanam")
-PTTab:CreateParagraph({Title="Cara pakai", Content="Karakter otomatis gerak tiap 5 tile sesuai jangkauan 5x5. Isi koordinat area lalu nyalakan toggle."})
-PTTab:CreateInput({Name="X mulai", PlaceholderText="0", RemoveTextAfterFocusLost=false, Callback=function(t) C.PX1=tonumber(t) or C.PX1 end})
-PTTab:CreateInput({Name="X akhir", PlaceholderText="99", RemoveTextAfterFocusLost=false, Callback=function(t) C.PX2=tonumber(t) or C.PX2 end})
-PTTab:CreateInput({Name="Y mulai", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.PY1=tonumber(t) or C.PY1 end})
-PTTab:CreateInput({Name="Y akhir", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.PY2=tonumber(t) or C.PY2 end})
-PTTab:CreateInput({Name="ID seed", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.PSeed=tonumber(t) or C.PSeed end})
-PTTab:CreateSlider({Name="Delay antar tile", Range={0.1,2}, Increment=0.05, CurrentValue=0.25, Flag="PD", Callback=function(v) C.PDelay=v end})
-PTTab:CreateSection("Kontrol")
-PTStatus = PTTab:CreateParagraph({Title="Status PT", Content="Belum dimulai."})
-PTTab:CreateButton({Name="Cek posisi karakter", Callback=function()
-   if Pos.x then notify("Posisi", string.format("X=%.1f Y=%.1f", Pos.x, Pos.y))
-   else notify("Belum terbaca", "Gerak sebentar dulu") end
+-- ====== HT ======
+local HTTab = Win:CreateTab("HT", 4483362458)
+HTTab:CreateSection("Baris Tree")
+HTTab:CreateInput({Name="X mulai", PlaceholderText="0", RemoveTextAfterFocusLost=false, Callback=function(t) C.X1=tonumber(t)or C.X1 end})
+HTTab:CreateInput({Name="X akhir", PlaceholderText="3", RemoveTextAfterFocusLost=false, Callback=function(t) C.X2=tonumber(t)or C.X2 end})
+HTTab:CreateInput({Name="Y", PlaceholderText="36", RemoveTextAfterFocusLost=false, Callback=function(t) C.Y_HT=tonumber(t)or C.Y_HT end})
+HTTab:CreateInput({Name="Waktu tumbuh (contoh: 3j47m)", PlaceholderText="3j47m", RemoveTextAfterFocusLost=false,
+   Callback=function(t)
+      local d=parseDur(t)
+      if d then C.Grow=d notify("Waktu tumbuh",fmt(d)) else notify("Format salah","Contoh: 3j47m, 70") end
+   end})
+HTTab:CreateInput({Name="Jeda aman tambahan (detik)", PlaceholderText="15", RemoveTextAfterFocusLost=false,
+   Callback=function(t) C.Margin=tonumber(t)or C.Margin end})
+HTTab:CreateInput({Name="ID seed", PlaceholderText="4587", RemoveTextAfterFocusLost=false,
+   Callback=function(t) C.Seed=tonumber(t)or C.Seed end})
+HTTab:CreateSlider({Name="Delay antar tile", Range={0.1,1}, Increment=0.05, CurrentValue=0.15, Flag="HD",
+   Callback=function(v) C.DelayHT=v end})
+HTTab:CreateSection("Gerak Otomatis")
+HTTab:CreateToggle({Name="Gerak otomatis saat harvest", CurrentValue=false, Flag="AutoMove",
+   Callback=function(v) C.Move=v end})
+HTTab:CreateSlider({Name="Tile per posisi berdiri", Range={1,5}, Increment=1, CurrentValue=3, Flag="Win",
+   Callback=function(v) C.Win=v end})
+HTTab:CreateButton({Name="Tes jalan ke X mulai", Callback=function()
+   notify("Gerak", goTo(math.min(C.X1,C.X2)+0.5) and "Sampai" or "Gagal")
 end})
-PTTab:CreateToggle({Name="Auto-move saat plant", CurrentValue=true, Flag="PTMove", Callback=function(v) C.PTMove=v end})
-PTTab:CreateButton({Name="Tes plant 1 tile (X1,Y1)", Callback=function()
-   plantTile(C.PX1, C.PY1, C.PSeed)
-   notify("Tes", string.format("SetTile %d,%d id%d", C.PX1, C.PY1, C.PSeed))
+HTTab:CreateButton({Name="Tes jalan ke X akhir", Callback=function()
+   notify("Gerak", goTo(math.max(C.X1,C.X2)+0.5) and "Sampai" or "Gagal")
 end})
-PTTab:CreateToggle({Name="Auto Plant (baris per baris)", CurrentValue=false, Flag="AutoPT", Callback=function(v)
-   C.PTOn=v
-   if not v then return end
-   task.spawn(function() autoPlantWithMove() C.PTOn=false end)
+HTTab:CreateSection("Kontrol HT")
+local HTStatus=HTTab:CreateParagraph({Title="Status", Content="Menunggu plant manual..."})
+local function setHTStatus(t) pcall(function() HTStatus:Set({Title="Status", Content=t}) end) end
+HTTab:CreateButton({Name="Mulai timer sekarang", Callback=function()
+   C.PlantAt=os.time() savePlant() notify("Timer","Mulai dihitung")
+end})
+HTTab:CreateButton({Name="Harvest 1x sekarang", Callback=function() task.spawn(harvestRow) end})
+HTTab:CreateToggle({Name="Auto Harvest (sesuai timer)", CurrentValue=false, Flag="AutoHT",
+   Callback=function(v)
+      C.OnHT=v if not v then return end
+      task.spawn(function()
+         while C.OnHT do
+            if C.PlantAt then
+               local sisa=C.Grow+C.Margin-(os.time()-C.PlantAt)
+               if sisa<=0 then
+                  setHTStatus("Harvesting...") harvestRow()
+                  C.PlantAt=nil savePlant()
+                  setHTStatus("Selesai. Plant lagi.")
+               else setHTStatus("Panen dalam "..fmt(sisa)) end
+            end
+            task.wait(1)
+         end
+      end)
+   end})
+
+-- ====== TOOLS ======
+local ToolsTab = Win:CreateTab("Tools", 4483362458)
+ToolsTab:CreateSection("Custom Script Loader")
+ToolsTab:CreateButton({Name="Muat Skrip FUHON", Callback=function()
+   local ok,err=pcall(function()
+      loadstring(game:HttpGet("https://raw.githubusercontent.com/depinrajasfonk-blip/fuhon/refs/heads/main/FUHON.lua"))()
+   end)
+   if ok then notify("Sukses","FUHON dimuat!") else warn("FUHON gagal:",err) notify("Gagal","Cek console F9") end
 end})
 
--- ANTI-GRAVITY
-local AGTab = Win:CreateTab("AntiGrav", 4483362458)
-AGTab:CreateSection("Anti-Gravity / Fly")
-AGTab:CreateParagraph({Title="Cara pakai",
-   Content="1) Nyalakan AntiGrav.\n2) Naik ke ketinggian yang diinginkan (tahan Jump manual atau pakai Naik/Turun).\n3) Ketinggian itu otomatis dijaga, karakter tidak jatuh.\n4) Jalankan Auto Plant di tab PT dengan Y sesuai ketinggian.\n5) Matikan untuk kembali jatuh."})
-AGTab:CreateToggle({Name="Aktifkan Fly", CurrentValue=false, Flag="AGOn", Callback=function(v)
-   AG.On = v
-   if v then
-      task.spawn(startAG)
-   else
-      if FlyConn then FlyConn:Disconnect() FlyConn=nil end
-      notify("Fly OFF", "Gravitasi normal")
-   end
-end})
-AGTab:CreateSection("Kontrol Ketinggian")
-local FlyTargetY = 30
-AGTab:CreateInput({Name="Target Y (tile)", PlaceholderText="30", RemoveTextAfterFocusLost=false,
-   Callback=function(t) FlyTargetY = tonumber(t) or FlyTargetY end})
-AGTab:CreateButton({Name="Terbang ke Target Y", Callback=function()
-   if not AG.On then notify("AntiGrav", "Nyalakan AntiGrav dulu") return end
-   task.spawn(flyToY, FlyTargetY)
-end})
-AGTab:CreateButton({Name="Naik 1 tile", Callback=function()
-   local J = getMobileBtn("Jump")
-   for i=1,10 do pressScreen(J,true) task.wait(0.04) pressScreen(J,false) task.wait(0.04) end
-   if AG.On then AG.TargetY = Pos.y end
-end})
-AGTab:CreateButton({Name="Turun 1 tile (matikan AG sebentar)", Callback=function()
-   AG.On = false task.wait(0.5)
-   local R = getMobileBtn("Right")
-   pressScreen(R,true) task.wait(0.3) pressScreen(R,false)
-   task.wait(0.4)
-   AG.On = true AG.TargetY = Pos.y startAG()
-end})
-AGTab:CreateButton({Name="Cek posisi Y sekarang", Callback=function()
-   if Pos.y then
-      notify("Posisi",
-         string.format("Client Y=%.1f\nServer Y=%.1f\nTarget=%.1f",
-            Pos.y, ServerY or Pos.y, AG.TargetY or Pos.y))
-   else notify("Belum terbaca", "Gerak sebentar dulu") end
-end})
-
--- ZOOM
-local ZoomTab = Win:CreateTab("Zoom", 4483362458)
-ZoomTab:CreateSection("Zoom Layar")
-ZoomTab:CreateParagraph({Title="Info", Content="Perkecil tampilan dunia agar lebih banyak tile terlihat. Client-side saja."})
-ZoomTab:CreateSlider({Name="Zoom level (1=normal, 5=jauh)", Range={1,5}, Increment=0.5, CurrentValue=1, Flag="ZoomLvl",
-   Callback=function(v) setZoom(v) end})
-ZoomTab:CreateButton({Name="Reset Zoom", Callback=function() setZoom(1) notify("Zoom", "Reset ke normal") end})
-
--- SPY
+-- ====== SPY ======
 local SpyTab = Win:CreateTab("Spy", 4483362458)
 SpyTab:CreateSection("Remote Spy")
-SpyTab:CreateToggle({Name="Aktifkan Spy", CurrentValue=false, Flag="SpyOn", Callback=function(v) Spy.On=v end})
+SpyTab:CreateToggle({Name="Aktifkan Spy", CurrentValue=false, Flag="SpyOn",
+   Callback=function(v) Spy.On=v end})
 SpyTab:CreateButton({Name="Salin log terakhir", Callback=function()
-   if setclipboard then setclipboard(table.concat(Spy.Logs,"\n")) notify("Spy", #Spy.Logs.." log disalin") end
+   if setclipboard then setclipboard(table.concat(Spy.Logs,"\n")) notify("Spy",#Spy.Logs.." log disalin") end
 end})
 SpyTab:CreateButton({Name="Hapus log", Callback=function() Spy.Logs={} end})
 
--- HOOK
-local hookOk, hookErr = pcall(function()
+-- ====== HOOK ======
+pcall(function()
    local old
-   old = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+   old = hookmetamethod(game,"__namecall",newcclosure(function(self,...)
       if getnamecallmethod()=="FireServer" and typeof(self)=="Instance" and not checkcaller() then
          if self==Unr then
-            local b = ...
+            local b=...
             if typeof(b)=="buffer" and buffer.len(b)>=9 and buffer.readu8(b,0)==2 then
-               Pos.y = buffer.readf32(b, 1)
-               Pos.x = buffer.readf32(b, 5)
-               -- Fly: geser ServerY gradual ke target, lalu tulis ke buffer
-               if AG.On and AG.TargetY then
-                  if ServerY == nil then ServerY = Pos.y end
-                  local dy = AG.TargetY - ServerY
-                  if math.abs(dy) > 0.01 then
-                     local step = math.min(math.abs(dy), MAX_STEP)
-                     ServerY = ServerY + (dy > 0 and step or -step)
-                  else
-                     ServerY = AG.TargetY
-                  end
-                  pcall(function() buffer.writef32(b, 1, ServerY) end)
-               end
+               Pos.y=buffer.readf32(b,1) Pos.x=buffer.readf32(b,5)
             end
-         end
-         if self==SaveInv then
-            local a1 = ...
-            if type(a1)=="table" and not InvTable then
-               InvTable = a1
-               warn("[HUB] invTable ditangkap,", #InvTable, "slot")
-            end
-         end
-         if self==SetTile then
-            local _, sx, sy, id = ...
-            -- timer HT
-            if id==C.Seed then C.PlantAt=os.time() task.spawn(savePlant) end
-            -- PNB: tangkap posisi place terakhir yang manual
-            if id and id~=0 and type(sx)=="number" then
-               C.PNBX=sx C.PNBY=sy C.PNBItem=id
-            end
-            -- PNB: saat break manual (id=0), simpan recipe dari pending
-            if id==0 then
+         elseif self==SetTile then
+            local _,x,y,id=...
+            if id and id~=0 and type(x)=="number" then
+               Last={x=x,y=y,id=id}
+            elseif id==0 then
                local r={}
-               for _, p in ipairs(PNBPending) do
-                  if os.clock()-p.t < 2 then r[#r+1]=p.s end
-               end
-               if #r>0 then PNBRecipe=r warn("[PNB] recipe auto-terekam:", #r, "paket") end
-               PNBPending={}
+               for _,p in ipairs(Pending) do if os.clock()-p.t<1.5 then r[#r+1]=p.s end end
+               if #r>0 then Recipe=r end
+               Pending={}
             end
-         end
-         -- rekam ByteNetReliable untuk recipe break
-         if self==Reliable and not checkcaller() then
+            if id==C.Seed then C.PlantAt=os.time() task.spawn(savePlant) end
+         elseif self==Reliable then
             local b=...
             if typeof(b)=="buffer" then
-               PNBPending[#PNBPending+1]={t=os.clock(), s=buffer.tostring(b)}
-               if #PNBPending>30 then table.remove(PNBPending,1) end
+               Pending[#Pending+1]={t=os.clock(),s=buffer.tostring(b)}
+               if #Pending>30 then table.remove(Pending,1) end
             end
          end
          if Spy.On and not IGNORE[self.Name] then
-            local args = table.pack(...)
+            local args=table.pack(...)
             task.spawn(function()
-               local t = {}
+               local t={}
                for i=1,args.n do t[i]=ser(args[i]) end
-               local line = self:GetFullName().."("..table.concat(t,", ")..")"
-               Spy.Logs[#Spy.Logs+1] = line
+               local line=self:GetFullName().."("..table.concat(t,", ")..")"
+               Spy.Logs[#Spy.Logs+1]=line
                if #Spy.Logs>60 then table.remove(Spy.Logs,1) end
-               warn("[SPY]", line)
+               warn("[SPY]",line)
             end)
          end
       end
-      return old(self, ...)
+      return old(self,...)
    end))
 end)
-if not hookOk then warn("[HUB] Hook gagal:", hookErr) end
+
+-- Hook OnClientEvent: deteksi server konfirmasi block hancur
+pcall(function()
+   SetTile.OnClientEvent:Connect(function(layer, x, y, id)
+      if x==C.X and y==C.Y and id==0 then
+         BlockBroken = true
+      end
+   end)
+end)
 
 loadPlant()
-if C.PlantAt then notify("Timer dipulihkan", "Timer plant terakhir dilanjutkan") end
-notify("Berhasil!", "Hub v5 dimuat.")
+if C.PlantAt then notify("Timer dipulihkan","Timer plant terakhir dilanjutkan") end
+notify("Berhasil!","Growtopia Hub berhasil dimuat.")
 warn("[HUB] selesai")
